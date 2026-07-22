@@ -1,0 +1,34 @@
+{
+  "input": "D:\\Data\\TW-1\\result\\MINPA\\ori\\HX1-Or_GRAS_MINPA-MOD1-DEF_SCI_N_20211202191251_20211203011723_00639_A.mat",
+  "start_utc": "2021-12-03T00:00:00Z",
+  "stop_utc": "2021-12-03T01:00:00Z",
+  "species": "H+",
+  "mode": 1,
+  "energy_range_eV": [
+    0.0,
+    null
+  ],
+  "quality_policy": "moments",
+  "background_model": null,
+  "background_version": null,
+  "coordinate_transform": "MINPA payload to spacecraft body [-V2,+V3,-V1]; spacecraft body to MSO via Rz(-Yaw) Ry(-Pitch) Rx(-Roll) from nearest MOMAG attitude",
+  "energy_width_method": "per-channel logarithmic edges inferred from adjacent calibrated energy centers; not fixed dE/E=0.15",
+  "vdf_method": {
+    "quantity": "density-weighted reduced VDF proxy",
+    "finite_cell_sampling": {
+      "angular_per_dimension": 17,
+      "energy": 9,
+      "energy_bounds": "per-channel logarithmic edges"
+    },
+    "coverage_shown_separately": true,
+    "record_aggregation": "mean per record"
+  },
+  "outputs": {
+    "npz": "C:\\Users\\Administrator\\Documents\\-E_highE_O+\\docs\\assets\\minpa_mode1_example\\mode1_Hplus.npz",
+    "csv": "C:\\Users\\Administrator\\Documents\\-E_highE_O+\\docs\\assets\\minpa_mode1_example\\mode1_Hplus.csv",
+    "spectrum": "C:\\Users\\Administrator\\Documents\\-E_highE_O+\\docs\\assets\\minpa_mode1_example\\spectrum.png",
+    "moments": "C:\\Users\\Administrator\\Documents\\-E_highE_O+\\docs\\assets\\minpa_mode1_example\\moments.png",
+    "vdf": "C:\\Users\\Administrator\\Documents\\-E_highE_O+\\docs\\assets\\minpa_mode1_example\\vdf_mso_planes.png",
+    "coordinates": "C:\\Users\\Administrator\\Documents\\-E_highE_O+\\docs\\assets\\minpa_mode1_example\\coordinate_transform.png"
+  }
+}

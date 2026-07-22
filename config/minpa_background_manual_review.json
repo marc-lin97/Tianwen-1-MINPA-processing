@@ -1,0 +1,108 @@
+{
+  "review_date": "2026-07-16",
+  "candidate_source": "outputs/minpa_background_paper_reproduction/data/background_interval_candidates.json",
+  "candidate_numbering": "one-based index in the original 40-candidate context montage",
+  "review_basis": "manual inspection of whether a coherent real ion spectral ridge is visible between the two black candidate-boundary lines",
+  "decisions": {
+    "reject_visible_or_weak_real_spectrum": [
+      5,
+      6,
+      9,
+      16,
+      17,
+      18,
+      24,
+      25,
+      32,
+      35,
+      37
+    ],
+    "approve_no_visible_real_spectrum": [
+      10,
+      13,
+      23,
+      26,
+      27,
+      29,
+      30,
+      33,
+      34,
+      38
+    ]
+  },
+  "expanded_review": {
+    "candidate_source": "outputs/minpa_background_paper_reproduction/data/expanded_quiet_window_candidates.json",
+    "candidate_numbering": "expanded_candidate_number",
+    "review_basis": "manual inspection inside the black candidate-boundary lines; adjusted intervals replace the automatic eight-minute boundaries",
+    "decisions": {
+      "approve_full_interval": [
+        3,
+        6,
+        15,
+        19,
+        27,
+        40
+      ],
+      "reject_visible_or_weak_real_spectrum": [
+        25
+      ],
+      "approve_adjusted_interval": [
+        {
+          "expanded_candidate_number": 1,
+          "start_utc": "2021-12-01T08:32:00Z",
+          "stop_utc": "2021-12-01T08:38:00Z",
+          "manual_change": "stop shortened from 08:40 to 08:38 UTC"
+        },
+        {
+          "expanded_candidate_number": 7,
+          "start_utc": "2021-12-02T07:46:00Z",
+          "stop_utc": "2021-12-02T07:52:00Z",
+          "manual_change": "start moved from 07:44 to 07:46 UTC"
+        },
+        {
+          "expanded_candidate_number": 16,
+          "start_utc": "2021-12-07T15:05:00Z",
+          "stop_utc": "2021-12-07T15:15:00Z",
+          "manual_change": "manual interval 15:05-15:15 UTC replaces automatic 15:08-15:16 window"
+        }
+      ]
+    }
+  },
+  "approved_set_summary": {
+    "interval_count": 19,
+    "quality_accepted_interval_count": 19,
+    "kept_record_count": 522,
+    "required_minimum_intervals": 20,
+    "required_minimum_records": 300,
+    "minimum_intervals_satisfied": false,
+    "minimum_records_satisfied": true,
+    "validation_status": "exact_ori_and_quality_recount_passed_for_all_19_intervals_after_automatic_borderline_trimming",
+    "validation_output": "outputs/minpa_background_paper_reproduction/data/approved_background_intervals_validation.json"
+  },
+  "reference_classifier": {
+    "version": "minpa-mode1-quiet-reference-v1",
+    "features": [
+      "time-mean H+ DEF peak divided by the median over energy",
+      "largest adjacent-three-energy H+ count-equivalent fraction"
+    ],
+    "time_mean_def_peak_to_median_threshold": 2.75,
+    "h_count_top3_energy_fraction_threshold": 0.133,
+    "decision_rule": "classify a real spectrum only when both features exceed threshold; otherwise classify a pure-background reference",
+    "borderline_relative_margin": 0.10,
+    "borderline_policy": "scores within 10 percent of one require manual review",
+    "calibration_agreement": "21 of 21 manually labeled intervals",
+    "nested_leave_one_out_accuracy": 0.8571428571428571,
+    "nested_leave_one_out_errors": [18, 37, 38]
+  },
+  "boundary_refinement": {
+    "version": "minpa-mode1-borderline-boundary-v1",
+    "applies_to": "pure_background_borderline only",
+    "boundary_step_s": 60.0,
+    "minimum_duration_fraction": 0.5,
+    "selection_rule": "retain the longest high-confidence subwindow passing gross-coherence and quality checks; break equal-duration ties by lowest decision score; otherwise reject",
+    "result": "all 8 borderline candidates reached high confidence after trimming",
+    "manual_override_policy": "manual adjusted boundaries for expanded candidates 1, 7, and 16 take precedence; automatic boundaries are used for previously full-approved borderline candidates"
+  },
+  "status": "manual_review_validated_19_intervals_one_more_required",
+  "model_policy": "Do not promote a production background model until exact ori/quality validation passes and at least one additional clean interval raises the accepted total to 20."
+}

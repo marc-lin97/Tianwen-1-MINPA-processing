@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "highe-oplus"
+version = "0.1.0"
+description = "MAVEN and Tianwen-1 plasma moments, coordinates, and MSE spatial statistics."
+requires-python = ">=3.10"
+dependencies = [
+  "cdflib",
+  "numpy",
+  "scipy",
+  "pandas",
+  "h5py",
+  "matplotlib",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]

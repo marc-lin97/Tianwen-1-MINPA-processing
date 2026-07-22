@@ -1,0 +1,41 @@
+{
+  "ori": "D:\\Data\\TW-1\\result\\MINPA\\ori\\HX1-Or_GRAS_MINPA-MOD1-DEF_SCI_N_20211202191251_20211203011723_00639_A.mat",
+  "nv": "D:\\Data\\TW-1\\result\\MINPA\\NV\\NV_20211203.mat",
+  "nv_mso2": "D:\\Data\\TW-1\\result\\MINPA\\NV_MSO_2\\NV_20211203.mat",
+  "interval_utc": {
+    "start": "2021-12-03T00:00:00Z",
+    "stop": "2021-12-03T01:00:00Z"
+  },
+  "coordinate_chain": "MINPA payload to spacecraft body [-V2,+V3,-V1]; Rz(-Yaw) Ry(-Pitch) Rx(-Roll) body to MSO",
+  "energy_width_method": "per-channel logarithmic edges inferred from adjacent calibrated energy centers; not fixed dE/E=0.15",
+  "density_absolute_error_cm3": {
+    "input_count": 211,
+    "count": 210,
+    "median": 8.750845199578805e-07,
+    "maximum": 1.7396275957537455e-06
+  },
+  "density_current_over_nv_mso2": {
+    "input_count": 210,
+    "count": 210,
+    "median": 0.9999998296711032,
+    "maximum": 0.9999999261863675
+  },
+  "legacy_velocity_vector_error_km_s": {
+    "input_count": 211,
+    "count": 210,
+    "median": 1.0366398498607216e-05,
+    "maximum": 1.9321635783080856e-05
+  },
+  "mso_velocity_vector_error_km_s": {
+    "input_count": 202,
+    "count": 202,
+    "median": 1.0291686620312253e-05,
+    "maximum": 1.5609418862200742e-05
+  },
+  "stored_legacy_to_mso_transform_error_km_s": {
+    "input_count": 202,
+    "count": 202,
+    "median": 6.355287432313019e-14,
+    "maximum": 1.7321073277186237e-13
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "algorithm_version": "minpa-mode1-temporal-noise-v2",
+  "analysis_status": "exploratory_auto_no_cross_year_manual_audit",
+  "candidate_selection": {
+    "duration_s": 480.0,
+    "step_s": 240.0,
+    "min_records": 24,
+    "max_record_gap_s": 25.0,
+    "reject_quality_mask": 12,
+    "low_signal_quantile": 0.5,
+    "max_intervals_per_day": 4,
+    "min_separation_s": 7200.0,
+    "preliminary_quantum_max_intervals": 40
+  },
+  "classifier": {
+    "def_peak_to_median_threshold": 2.75,
+    "h_count_top3_fraction_threshold": 0.133,
+    "adjacent_energy_bins": 3,
+    "minimum_valid_def_energy_bins": 30,
+    "borderline_relative_margin": 0.1
+  },
+  "boundary_refinement": {
+    "minimum_duration_fraction": 0.5,
+    "boundary_step_s": 60.0,
+    "minimum_def_records": 12,
+    "minimum_dpf_records": 18
+  },
+  "background_estimation": {
+    "mode": 1,
+    "primary_estimator": "count_equivalent_energy_pooled",
+    "reject_quality_mask": 12,
+    "require_project_quality": true,
+    "require_native_quality_zero": true,
+    "reject_interval_if_project_flagged": true,
+    "min_approved_intervals": 20,
+    "min_total_records": 300,
+    "min_records_per_interval": 18,
+    "min_channel_samples": 20,
+    "uncertainty_mad_scale": 1.4826,
+    "quantum_min_nonzero_samples": 5,
+    "quantum_residual_tolerance_counts": 0.05,
+    "quantum_min_valid_fraction": 0.95
+  },
+  "monthly_inference": {
+    "min_accepted_intervals": 20,
+    "min_accepted_records": 300,
+    "min_distinct_days": 5
+  },
+  "statistics": {
+    "bootstrap_replicates": 5000,
+    "permutation_replicates": 5000,
+    "random_seed": 20260716,
+    "fdr_alpha": 0.05,
+    "practical_relative_change": 0.2,
+    "coverage_gap_days": 45.0,
+    "minimum_segment_months": 2
+  },
+  "known_manual_review": {
+    "expanded_candidates": "outputs/minpa_background_paper_reproduction/data/expanded_quiet_window_candidates.json"
+  }
+}

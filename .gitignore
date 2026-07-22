@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+build/
+dist/
+*.egg-info/
+
+# Raw mission data and large derived runs stay outside Git.
+data/
+outputs/
+output/
+tmp/
+*.mat
+*.cdf
+*.2B
+*.h5
+*.hdf5
+
+# Keep the compact README example figures/metadata, not its data arrays.
+docs/assets/minpa_mode1_example/*.npz
+docs/assets/minpa_mode1_example/*.csv
+

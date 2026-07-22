@@ -1,0 +1,93 @@
+{
+  "paper": {
+    "title": "Analysis of the background signal in Tianwen-1 MINPA",
+    "doi": "10.1016/j.asr.2024.07.080",
+    "arxiv": "2403.13693",
+    "analysis_start_utc": "2021-12-01T00:00:00Z",
+    "analysis_stop_utc": "2022-02-01T00:00:00Z",
+    "local_data_limitation": "Under the configured local root D:\\Data\\TW-1\\result\\MINPA\\ori, Mode-1 coverage stops at 2022-01-01T05:48:33Z and resumes on 2022-02-28T23:29:14Z. This is a statement about the audited local copy, not mission-wide availability; no mission-data download is performed."
+  },
+  "manual_review_file": "config/minpa_background_manual_review.json",
+  "candidate_selection": {
+    "duration_s": 480.0,
+    "step_s": 240.0,
+    "min_records": 24,
+    "max_record_gap_s": 25.0,
+    "reject_quality_mask": 12,
+    "low_signal_quantile": 0.35,
+    "requested_intervals": 40,
+    "max_intervals_per_day": 4,
+    "min_separation_s": 7200.0
+  },
+  "expanded_candidate_selection": {
+    "duration_s": 480.0,
+    "step_s": 240.0,
+    "min_records": 24,
+    "max_record_gap_s": 25.0,
+    "reject_quality_mask": 12,
+    "low_signal_quantile": 0.50,
+    "requested_intervals": 100,
+    "max_intervals_per_day": 4,
+    "min_separation_s": 7200.0,
+    "purpose": "Broader provisional pool for the manually calibrated pure-background reference classifier; predictions remain subject to review."
+  },
+  "borderline_boundary_refinement": {
+    "minimum_duration_fraction": 0.5,
+    "boundary_step_s": 60.0,
+    "minimum_def_records": 12,
+    "minimum_dpf_records": 18,
+    "selection_rule": "Among subwindows that pass the high-confidence spectral classifier, gross-coherence veto, and quality checks, retain the longest; break equal-duration ties by the lowest decision score. Discard the candidate if none pass at or above half duration."
+  },
+  "coherent_signal_screen": {
+    "count_threshold": 5.0,
+    "maximum_energy_occupancy": 0.10,
+    "weak_count_threshold": 1.0,
+    "maximum_weak_energy_occupancy": 0.40,
+    "paper_quiet_reference_maximum_weak_occupancy": 0.2702702702702703,
+    "interpretation": "Reject if any H+ energy channel exceeds five count equivalents in at least 10% of records, or exceeds one count equivalent in at least 40%. The weak threshold is above the 0.27 maximum measured in this project's 23:10-23:20 window following the paper's around-23:10 quiet example."
+  },
+  "background_model": {
+    "mode": 1,
+    "primary_estimator": "count_equivalent_energy_pooled",
+    "reject_quality_mask": 12,
+    "require_project_quality": true,
+    "require_native_quality_zero": true,
+    "reject_interval_if_project_flagged": true,
+    "min_approved_intervals": 20,
+    "min_total_records": 300,
+    "min_records_per_interval": 18,
+    "min_channel_samples": 20,
+    "uncertainty_mad_scale": 1.4826,
+    "quantum_min_nonzero_samples": 5,
+    "quantum_residual_tolerance_counts": 0.05,
+    "quantum_min_valid_fraction": 0.95
+  },
+  "quality_policy": {
+    "retain_bits": [1, 2, 5],
+    "reject_bits": [3, 4],
+    "reject_mask_decimal": 12,
+    "reason": "Sparse records and bit-5 high-channel records are retained under the relaxed policy; UV and alternating-channel errors remain hard vetoes."
+  },
+  "paper_example_intervals": [
+    {
+      "start_utc": "2021-12-25T20:02:00Z",
+      "stop_utc": "2021-12-26T01:20:00Z",
+      "label": "paper Figure 3 and Figure 5 weak-signal orbit"
+    },
+    {
+      "start_utc": "2021-12-25T23:10:00Z",
+      "stop_utc": "2021-12-25T23:20:00Z",
+      "label": "paper background example after the 23:10 interface; no coherent H+ ridge and project bits 3-4 absent"
+    },
+    {
+      "start_utc": "2021-12-31T02:40:00Z",
+      "stop_utc": "2021-12-31T08:40:00Z",
+      "label": "paper Figure 5 clear solar-wind interval"
+    },
+    {
+      "start_utc": "2021-12-29T15:00:00Z",
+      "stop_utc": "2021-12-30T18:00:00Z",
+      "label": "paper Figure 10 distribution interval"
+    }
+  ]
+}
