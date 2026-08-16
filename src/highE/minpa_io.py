@@ -7,10 +7,13 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Sequence
 from xml.etree import ElementTree as ET
 
 import h5py
 import numpy as np
+
+from .minpa_modes import mode_layout
 
 
 @dataclass(frozen=True)
@@ -199,6 +202,26 @@ def _scalar(values: list[np.ndarray], index: int) -> float:
     return float(arr[0]) if arr.size else math.nan
 
 
+def _quality_scalar(values: list[np.ndarray], index: int) -> float:
+    """Decode native Quality stored either numerically or as ``0xNN`` text."""
+
+    if index >= len(values):
+        return math.nan
+    arr = np.asarray(values[index]).reshape(-1, order="F")
+    if not arr.size:
+        return math.nan
+    if arr.size > 1 and arr.dtype.kind in "ui" and np.all((arr >= 0) & (arr < 128)):
+        text = "".join(chr(int(value)) for value in arr if int(value)).strip()
+        try:
+            return float(int(text, 0))
+        except ValueError:
+            pass
+    try:
+        return float(arr[0])
+    except (TypeError, ValueError):
+        return math.nan
+
+
 def read_ori_records(path: str | Path, start_s: float = -np.inf, end_s: float = np.inf) -> list[MinpaRecord]:
     """Read local MATLAB ``ori`` records, including native diagnostics.
 
@@ -222,7 +245,7 @@ def read_ori_records(path: str | Path, start_s: float = -np.inf, end_s: float = 
                 continue
             if not start_s <= time_s < end_s:
                 continue
-            quality = _scalar(fields[37], i)
+            quality = _quality_scalar(fields[37], i)
             rows.append(MinpaRecord(
                 time_unix_s=time_s,
                 mode=mode,
@@ -236,6 +259,154 @@ def read_ori_records(path: str | Path, start_s: float = -np.inf, end_s: float = 
     return rows
 
 
+def read_ori_native_quality(
+    path: str | Path,
+    start_s: float = -np.inf,
+    end_s: float = np.inf,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Read only record epochs and native ``Quality`` from an ori MAT file.
+
+    Mode-12 quality is duplicated onto the two calibrated product-time
+    subrecords.  Avoiding the ion-science field makes full-mission candidate
+    preflight substantially cheaper without changing the quality rule.
+    """
+
+    source = Path(path)
+    mode = mode_from_filename(source)
+    times: list[float] = []
+    qualities: list[int] = []
+    with h5py.File(source, "r") as handle:
+        group = handle["tw1_MINPA_data"]
+        refs = group["value"][:, 0]
+        fields = {
+            i + 1: _matlab_values(handle, ref)
+            for i, ref in enumerate(refs)
+            if i + 1 in {1, 37}
+        }
+        count = min(len(fields[1]), len(fields[37]))
+        for index in range(count):
+            try:
+                time_s = parse_utc(_decode_char(handle, fields[1][index]))
+            except ValueError:
+                continue
+            quality = _quality_scalar(fields[37], index)
+            value = int(quality) if np.isfinite(quality) else 0
+            product_times = (
+                (time_s + 1.025, time_s + 3.075) if mode == 12 else (time_s,)
+            )
+            for product_time in product_times:
+                if start_s <= product_time < end_s:
+                    times.append(float(product_time))
+                    qualities.append(value)
+    if not times:
+        return np.empty(0, dtype=float), np.empty(0, dtype=np.uint32)
+    order = np.argsort(times, kind="stable")
+    return np.asarray(times, dtype=float)[order], np.asarray(qualities, dtype=np.uint32)[order]
+
+
+def inspect_ori_science_layout(
+    path: str | Path,
+    start_s: float = -np.inf,
+    end_s: float = np.inf,
+) -> dict[str, int]:
+    """Validate raw ion-array lengths without changing the source file.
+
+    Mode 12 is deliberately checked before its two-subrecord split, hence its
+    expected raw row contains ``2 * 48 * 1 * 1 * 32`` values.
+    """
+
+    source = Path(path)
+    mode = mode_from_filename(source)
+    layout = mode_layout(mode)
+    expected = layout.values_per_subrecord * layout.raw_subrecords
+    inspected = 0
+    invalid = 0
+    with h5py.File(source, "r") as handle:
+        group = handle["tw1_MINPA_data"]
+        refs = group["value"][:, 0]
+        if np.isneginf(start_s) and np.isposinf(end_s):
+            dataset = handle[refs[41]]["t"]
+            stored = np.asarray(dataset)
+            if stored.dtype == object:
+                sizes = [
+                    int(handle[ref].size)
+                    for ref in stored.reshape(-1, order="F")
+                ]
+            elif stored.ndim == 2 and stored.shape[1] > 1:
+                sizes = [int(stored.shape[0])] * int(stored.shape[1])
+            else:
+                sizes = [int(stored.size)]
+            return {
+                "mode": mode,
+                "expected_values_per_raw_record": expected,
+                "inspected_raw_record_count": len(sizes),
+                "invalid_raw_record_count": int(
+                    sum(size != expected for size in sizes)
+                ),
+            }
+        fields = {
+            i + 1: _matlab_values(handle, ref)
+            for i, ref in enumerate(refs)
+            if i + 1 in {1, 42}
+        }
+        count = min(len(fields[1]), len(fields[42]))
+        for index in range(count):
+            try:
+                time_s = parse_utc(_decode_char(handle, fields[1][index]))
+            except ValueError:
+                continue
+            product_times = (
+                (time_s + 1.025, time_s + 3.075) if mode == 12 else (time_s,)
+            )
+            if not any(start_s <= value < end_s for value in product_times):
+                continue
+            inspected += 1
+            if np.asarray(fields[42][index]).size != expected:
+                invalid += 1
+    return {
+        "mode": mode,
+        "expected_values_per_raw_record": expected,
+        "inspected_raw_record_count": inspected,
+        "invalid_raw_record_count": invalid,
+    }
+
+
+_ORI_COVERAGE_PATTERN = re.compile(
+    r"MINPA-MOD(?P<mode>\d+)-.*?_(?P<start_day>\d{8})(?P<start_time>\d{6})_"
+    r"(?P<stop_day>\d{8})(?P<stop_time>\d{6})_"
+)
+
+
+def ori_file_coverage(path: str | Path) -> tuple[int, float, float]:
+    """Return mode and UTC filename coverage for an ori file."""
+
+    match = _ORI_COVERAGE_PATTERN.search(Path(path).name)
+    if match is None:
+        raise ValueError(f"Cannot parse MINPA ori coverage from {Path(path).name}")
+    mode = int(match.group("mode"))
+    start = datetime.strptime(
+        match.group("start_day") + match.group("start_time"), "%Y%m%d%H%M%S"
+    ).replace(tzinfo=UTC).timestamp()
+    stop = datetime.strptime(
+        match.group("stop_day") + match.group("stop_time"), "%Y%m%d%H%M%S"
+    ).replace(tzinfo=UTC).timestamp()
+    return mode, start, stop
+
+
+def ori_files_for_interval(
+    entries: Sequence[tuple[Path, int, float, float]],
+    mode: int,
+    start_s: float,
+    stop_s: float,
+) -> list[Path]:
+    """Select catalogued ori files overlapping ``[start_s, stop_s)``."""
+
+    return sorted(
+        path for path, item_mode, file_start, file_stop in entries
+        if item_mode == mode and file_start < stop_s and file_stop >= start_s
+    )
+
+
 def read_records(path: str | Path, start_s: float = -np.inf, end_s: float = np.inf) -> list[MinpaRecord]:
     source = Path(path)
     if source.suffix.lower() == ".mat":
@@ -243,4 +414,3 @@ def read_records(path: str | Path, start_s: float = -np.inf, end_s: float = np.i
     if source.suffix.upper() == ".2B":
         return read_public_records(source, start_s, end_s)
     raise ValueError(f"Unsupported MINPA file type: {source}")
-

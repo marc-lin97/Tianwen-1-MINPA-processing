@@ -1,0 +1,77 @@
+{
+  "review_version": "minpa-multimode-noise-review-v2.0.0-rc1",
+  "release_stage": "provisional_review_only",
+  "coverage_years": [2021, 2022, 2023, 2024, 2025],
+  "units": "1/(s cm^2 sr eV)",
+  "dimension_order": ["energy", "pitch", "azimuth", "mass"],
+  "layouts": {
+    "mode4": {
+      "shape": [64, 4, 16, 8],
+      "cadence_s": 12.3,
+      "reviewed_species_mass_amu": {
+        "H+": [1.0],
+        "O+": [16.0],
+        "O2+": [32.0]
+      }
+    },
+    "mode12": {
+      "raw_shape": [2, 48, 1, 1, 32],
+      "subrecord_shape": [48, 1, 1, 32],
+      "subrecord_offsets_s": [1.025, 3.075],
+      "cadence_s": 2.05,
+      "azimuth_integrated": true,
+      "reviewed_species_mass_amu": {
+        "H+": [0.76, 1.25],
+        "O+": [15.56, 16.45],
+        "O2+": [30.94, 33.17]
+      }
+    }
+  },
+  "quality": {
+    "utc_minute_seconds": 60,
+    "minimum_coverage_fraction": 0.8,
+    "maximum_gap_cadence_factor": 1.5,
+    "project_reject_bits": [3, 4],
+    "native_quality_required": 0,
+    "missing_quality_policy": "exclude_and_report"
+  },
+  "selection": {
+    "grouping": ["mode", "species", "UTC_month"],
+    "score": "median_t(sum_E(max(DEF(E,t),0)))",
+    "quantile": 0.1,
+    "cutoff_ties": "include_all",
+    "merge_adjacent_minutes": true,
+    "minimum_duration_s": 60,
+    "maximum_duration_s": null,
+    "candidate_count_limit": null,
+    "species_are_independent": true
+  },
+  "plot": {
+    "one_species_per_png": true,
+    "context_minutes": 12,
+    "smoothing": false,
+    "interpolation": false,
+    "quality_bad_records": "blank",
+    "color_norm": "LogNorm",
+    "color_quantiles": [0.01, 0.997],
+    "uniform_within": ["mode", "species"],
+    "boundary_color": "black"
+  },
+  "future_estimator": {
+    "formula": "B_c = mean_j(mean_t(x_t,c | x_t,c > 0))",
+    "bootstrap_replicates": 5000,
+    "bootstrap_seed": 2024070801,
+    "unsupported": "no positive samples; preserve raw",
+    "low_support": "fewer than 3 approved intervals or fewer than 5 positive samples; subtract and flag",
+    "supported": "at least 3 approved intervals and at least 5 positive samples",
+    "correction": "max(raw-background,0); NaN preserved",
+    "unreviewed_mass_policy": "preserve raw; never proxy from nearest species"
+  },
+  "production_policy": {
+    "rc1_may_denoise_production_data": false,
+    "future_policy_name": "multimode-paper-channel-subtract",
+    "mode7_policy": "preserve raw",
+    "default_policy": "none",
+    "rollback": "continue using frozen Mode-1 v1.1.0 and preserve Mode-4/12 raw values"
+  }
+}

@@ -11,7 +11,17 @@ from highE.minpa_background import (
     MinpaMode1Records,
     estimate_background,
 )
-from highE.tw1_minpa import background_model_is_provisional, prepare_background_records
+from highE.minpa_modes import species_mass_indices
+from highE.minpa_multimode_background import (
+    estimate_multimode_background,
+    mode_channel_shape,
+)
+from highE.tw1_minpa import (
+    background_model_is_provisional,
+    prepare_background_records,
+    prepare_multimode_background_records,
+    prepare_unified_static_background_records,
+)
 
 
 def _valid_model():
@@ -84,3 +94,73 @@ def test_provisional_model_is_explicitly_identified() -> None:
     )
     assert background_model_is_provisional(provisional) is True
 
+
+def test_prepare_multimode_records_corrects_only_reviewed_mode_and_mass() -> None:
+    shape4 = mode_channel_shape(4)
+    h_mass = int(species_mass_indices(4, "H+")[0])
+    interval = np.zeros((2, *shape4))
+    interval[..., h_mass] = 2.0
+    model4 = estimate_multimode_background(
+        4,
+        {"H+": [interval]},
+        bootstrap_replicates=0,
+        review_status="finalized",
+    )
+    mode4 = np.full(np.prod(shape4), 5.0)
+    mode7 = np.array([8.0, 9.0])
+    mode1 = np.array([11.0, 12.0])
+    result = prepare_multimode_background_records(
+        np.array([4, 7, 1]),
+        np.array([1.0, 2.0, 3.0]),
+        [mode4, mode7, mode1],
+        {4: model4},
+    )
+    corrected4 = result.corrected_counts[0].reshape(shape4)
+    np.testing.assert_allclose(corrected4[..., h_mass], 3.0)
+    np.testing.assert_allclose(corrected4[..., 1], 5.0)
+    np.testing.assert_array_equal(result.corrected_counts[1], mode7)
+    np.testing.assert_array_equal(result.corrected_counts[2], mode1)
+    assert result.background_applied.tolist() == [True, False, False]
+
+
+def test_prepare_multimode_records_refuses_provisional_model() -> None:
+    shape12 = mode_channel_shape(12)
+    interval = np.ones((1, *shape12))
+    model12 = estimate_multimode_background(
+        12, {"H+": [interval]}, bootstrap_replicates=0
+    )
+    with np.testing.assert_raises_regex(ValueError, "non-finalized"):
+        prepare_multimode_background_records(
+            np.array([12]),
+            np.array([1.025]),
+            [np.ones(np.prod(shape12))],
+            {12: model12},
+        )
+
+
+def test_prepare_unified_static_records_corrects_mode1_and_mode4() -> None:
+    mode1_model = _valid_model()
+    shape4 = mode_channel_shape(4)
+    h_mass = int(species_mass_indices(4, "H+")[0])
+    interval = np.zeros((2, *shape4))
+    interval[..., h_mass] = 2.0
+    mode4_model = estimate_multimode_background(
+        4,
+        {"H+": [interval]},
+        bootstrap_replicates=0,
+        review_status="finalized",
+    )
+    raw1 = np.full(np.prod(MODE1_SHAPE), 3.0)
+    raw4 = np.full(np.prod(shape4), 5.0)
+    result = prepare_unified_static_background_records(
+        np.array([1, 4]),
+        np.array([0.0, 1.0]),
+        [raw1, raw4],
+        mode1_model,
+        {4: mode4_model},
+    )
+    np.testing.assert_allclose(result.corrected_counts[0], 2.0)
+    corrected4 = result.corrected_counts[1].reshape(shape4)
+    np.testing.assert_allclose(corrected4[..., h_mass], 3.0)
+    np.testing.assert_allclose(corrected4[..., 1], 5.0)
+    assert result.background_applied.tolist() == [True, True]

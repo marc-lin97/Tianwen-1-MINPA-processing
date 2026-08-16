@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 from scipy.io import savemat
 
 from highE.minpa_background import MODE1_ENERGY_EV, MODE1_SHAPE, MinpaMode1Records
@@ -259,6 +260,8 @@ def test_empty_month_checkpoint_is_resumable(tmp_path: Path) -> None:
 
 def test_existing_manual_review_keeps_candidate25_rejected_and_adjusted_bounds() -> None:
     path = ROOT / "outputs" / "minpa_background_paper_reproduction" / "data" / "expanded_quiet_window_candidates.json"
+    if not path.exists():
+        pytest.skip("Local ignored manual-review artifact is not available in a clean checkout")
     decisions = _manual_decision_map(path)
     candidate25 = next(
         item for item in json.loads(path.read_text(encoding="utf-8"))["intervals"]

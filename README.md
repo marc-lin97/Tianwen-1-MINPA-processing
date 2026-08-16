@@ -3,6 +3,46 @@
 This repository builds high-energy ion moment products for Mars spacecraft data.
 Implemented routes are MAVEN STATIC-D1 and Tianwen-1 MINPA.
 
+## MINPA channel denoising v2.2.0
+
+The repository includes the frozen, time-invariant background models for
+MINPA Modes 1, 4, and 12, plus one human-approved before/after example for
+every Mode × H+/O+/O2+ combination.
+
+Install and verify the release without downloading mission data:
+
+```powershell
+python -m pip install -e .[test]
+python scripts/verify_minpa_v2_2_0_release.py
+```
+
+The frozen bundle is
+[`release/minpa_unified_static_channel_denoise_v2.2.0/bundle.json`](release/minpa_unified_static_channel_denoise_v2.2.0/bundle.json),
+with SHA-256
+`0c21995c2b3baf7ba82e0893aa0aa5c81c17f268787b28e3d75181dcac468c71`.
+The reviewed figures and decision manifest are under
+[`examples/minpa_denoise_v2.2.0/`](examples/minpa_denoise_v2.2.0/).
+
+![MINPA v2.2.0 Mode-1 H+ before/after example](examples/minpa_denoise_v2.2.0/signal/mode01_Hplus_signal02_20211129T073500.png)
+
+Apply the correction to a local read-only MINPA archive explicitly:
+
+```powershell
+python scripts/run_tw1_highE_day.py 20211231 `
+  --ori-root D:\Data\TW-1\result\MINPA\ori `
+  --background-policy all-approved-static-channel-subtract `
+  --static-background-bundle release\minpa_unified_static_channel_denoise_v2.2.0\bundle.json
+```
+
+Background subtraction remains disabled by default. Raw mission data are not
+redistributed; the README in the example directory lists the inputs and exact
+commands needed to regenerate the figures locally.
+
+The approved calibration windows are published only as UTC locators in
+[`calibration_intervals_approved.csv`](release/minpa_unified_static_channel_denoise_v2.2.0/calibration_intervals_approved.csv).
+No per-window spectra, review figures, scores, or intermediate statistics are
+included.
+
 ## MINPA raw-to-product quickstart
 
 The repository now contains a self-contained Python route from a released
@@ -76,8 +116,10 @@ Important limitations: local acceptance data currently cover Modes 1, 4, 7,
 and 12. Modes 9-11 resolve H+ only. Mode 12 resolves spectrum and density, but
 its released subrecord has one azimuth-integrated angular cell, so independent
 three-component velocity and a 2-D VDF are returned as unavailable. Background
-subtraction is Mode-1-only and requires an explicit valid model; it is never
-enabled by default.
+subtraction is never enabled by default. The frozen Mode-1 v1.1.0 path remains
+available. The finalized v2.2.0 bundle supports reviewed channels in Modes 1,
+4, and 12; automatic rc1 candidates remain ineligible, and Mode 7 remains
+uncorrected.
 
 ## Implemented MAVEN Route
 
@@ -363,7 +405,25 @@ This command sums counts and physical sums before recomputing means; it does
 not average cell means. X and Z are coarsened to `0.2 Rm`, while the Y sample
 selection remains the ten original `0.1 Rm` layers bounded by `+/-0.5 Rm`.
 
-## MINPA Mode-1 background correction
+## MINPA background correction
+
+The current all-approved static release is
+`minpa-unified-static-channel-denoise-v2.2.0`. It rebuilds Mode 1 from 295
+approved entries (273 exact-time unique intervals), reuses the frozen Mode-4/12
+v2.0.0 approved models, and intentionally applies no temporal scaling:
+
+```powershell
+python scripts\run_tw1_highE_day.py 20211231 `
+  --background-policy all-approved-static-channel-subtract `
+  --static-background-bundle release\minpa_unified_static_channel_denoise_v2.2.0\bundle.json
+```
+
+See `docs/release_minpa_unified_static_denoise_v2.2.0.md` for the estimator,
+scope, support counts, hashes, validation, rebuild command, and GitHub release
+packaging notes. The default remains `none`. The committed examples are the
+9 signal figures retained in the final review; each file already contains the
+raw and corrected panels. Only the aggregate count of 18 rejected candidates
+is retained.
 
 Build the provisional paper-method reproduction, validate its effect on the
 high-energy O+/O2+ moment chain, and write a separate corrected daily product:
@@ -385,11 +445,17 @@ python scripts\run_tw1_highE_day.py 20211231 `
 
 The historical default remains `--background-policy none`. The background
 interval policy retains project quality bits 1, 2, and 5 and rejects only bits
-3 and 4 (mask `0x0C`). A Mode-1 model is never applied to Mode 4/12. Provisional
-models require the explicit allow switch and write `_bgcorr_provisional_v1`
+3 and 4 (mask `0x0C`). A Mode-1 model is never applied to Mode 4/12. The
+separate multimode policy requires a finalized hash-verified bundle. The frozen
+v2.0.0 bundle is at `outputs/minpa_multimode_channel_denoise_v2.0.0/bundle.json`;
+rc1 and prefilter review candidates remain refused. Provisional Mode-1 models require the explicit allow switch and write `_bgcorr_provisional_v1`
 products without overwriting existing moment files. See
 `docs/method_minpa_background_reproduction.md` for estimator definitions, UV
 record rejection, validation, and the paper-figure reproduction matrix.
+The Mode-4/12 extension is documented in
+`docs/method_minpa_multimode_noise_denoise.md`; the frozen release, channel
+support limitations, hashes, and validation are recorded in
+`docs/release_minpa_multimode_denoise_v2.0.0.md`.
 The 40 low-total-count interval candidates are additionally screened for
 coherent H+ ridges; 21 currently remain. Figure 5 is reproduced separately in
 H+ count-equivalent space with the paper's nonzero-channel estimator. The old

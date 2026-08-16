@@ -1,0 +1,123 @@
+{
+  "artifact_version": "minpa-typical-noise-signal-examples-v2.2.0-public",
+  "status": "finalized_manual_review",
+  "bundle_sha256": "0c21995c2b3baf7ba82e0893aa0aa5c81c17f268787b28e3d75181dcac468c71",
+  "units": "native input and frozen background DPF: 1/(s cm^2 sr eV)",
+  "smoothing_or_interpolation": "none",
+  "counts": {
+    "mode_species_groups": 9,
+    "approved_before_after_examples": 9,
+    "rejected_candidate_count": 18
+  },
+  "signal_examples": [
+    {
+      "mode": 1,
+      "species": "H+",
+      "start_utc": "2021-11-29T07:35:00Z",
+      "stop_utc": "2021-11-29T07:40:00Z",
+      "figure": "signal/mode01_Hplus_signal02_20211129T073500.png",
+      "figure_sha256": "9b342015810dbfe96eee2f9ddf826ba2c00488dbddda10728b8bbba71d8dfba4",
+      "strength_tier": "strong_20x",
+      "maximum_median_channel_signal_to_background": 519.4808528054817,
+      "signal_peak_retention_fraction": 0.9925327081794474,
+      "ratio_peak_shift_channels": 0
+    },
+    {
+      "mode": 1,
+      "species": "O+",
+      "start_utc": "2024-10-04T17:10:00Z",
+      "stop_utc": "2024-10-04T17:15:00Z",
+      "figure": "signal/mode01_Oplus_signal01_20241004T171000.png",
+      "figure_sha256": "46857338403f0bd355a102596b8cb8b60550070d4cde6cb90a7c70e5ebcb3961",
+      "strength_tier": "strong_20x",
+      "maximum_median_channel_signal_to_background": 303.971119133574,
+      "signal_peak_retention_fraction": 0.9863102667040388,
+      "ratio_peak_shift_channels": 0
+    },
+    {
+      "mode": 1,
+      "species": "O2+",
+      "start_utc": "2024-01-23T17:45:00Z",
+      "stop_utc": "2024-01-23T17:50:00Z",
+      "figure": "signal/mode01_O2plus_signal03_20240123T174500.png",
+      "figure_sha256": "2e5dfe2da72aeff91a847b6404fcc642c9246d5a129984f5797d473d09be2f7f",
+      "strength_tier": "clear_5x",
+      "maximum_median_channel_signal_to_background": 26.917222663381168,
+      "signal_peak_retention_fraction": 0.8922704594977048,
+      "ratio_peak_shift_channels": 0
+    },
+    {
+      "mode": 4,
+      "species": "H+",
+      "start_utc": "2025-03-10T07:00:00Z",
+      "stop_utc": "2025-03-10T07:05:00Z",
+      "figure": "signal/mode04_Hplus_signal02_20250310T070000.png",
+      "figure_sha256": "5c7bc5a96366da33d1666e8fd268bb44330fb1fab9415fa875b9596deb24554e",
+      "strength_tier": "strong_20x",
+      "maximum_median_channel_signal_to_background": 141.94756554307116,
+      "signal_peak_retention_fraction": 0.9750645438221084,
+      "ratio_peak_shift_channels": 0
+    },
+    {
+      "mode": 4,
+      "species": "O+",
+      "start_utc": "2022-04-25T16:30:00Z",
+      "stop_utc": "2022-04-25T16:35:00Z",
+      "figure": "signal/mode04_Oplus_signal02_20220425T163000.png",
+      "figure_sha256": "30ef2f5a2c00f80d882be4e959a2465dde6603189220a0866a0fd622ba107d5a",
+      "strength_tier": "clear_5x",
+      "maximum_median_channel_signal_to_background": 28.066528066528065,
+      "signal_peak_retention_fraction": 0.9092213183013494,
+      "ratio_peak_shift_channels": 0
+    },
+    {
+      "mode": 4,
+      "species": "O2+",
+      "start_utc": "2022-07-22T07:00:00Z",
+      "stop_utc": "2022-07-22T07:05:00Z",
+      "figure": "signal/mode04_O2plus_signal01_20220722T070000.png",
+      "figure_sha256": "58ecb446a0a8f6024ab7e5f3db6c4dec616fcd0f6c41c4a57c52e11b56d7d443",
+      "strength_tier": "clear_5x",
+      "maximum_median_channel_signal_to_background": 58.87728459530026,
+      "signal_peak_retention_fraction": 0.9470334374553089,
+      "ratio_peak_shift_channels": 0
+    },
+    {
+      "mode": 12,
+      "species": "H+",
+      "start_utc": "2022-07-31T13:50:00Z",
+      "stop_utc": "2022-07-31T13:55:00Z",
+      "figure": "signal/mode12_Hplus_signal01_20220731T135000.png",
+      "figure_sha256": "78594f1ebaf30d9c224e3f97bfbbcb5936f2806e81235ab5a45fa1605f5c4853",
+      "strength_tier": "moderate_3x",
+      "maximum_median_channel_signal_to_background": 4.000362513426424,
+      "signal_peak_retention_fraction": 0.7046325916160423,
+      "ratio_peak_shift_channels": 0
+    },
+    {
+      "mode": 12,
+      "species": "O+",
+      "start_utc": "2022-04-01T15:55:00Z",
+      "stop_utc": "2022-04-01T16:00:00Z",
+      "figure": "signal/mode12_Oplus_signal03_20220401T155500.png",
+      "figure_sha256": "e014b282a305d0a68f048e82f1e17d0293b3fbe84d1e9ced6ee7f39a65ccdfc5",
+      "strength_tier": "moderate_3x",
+      "maximum_median_channel_signal_to_background": 3.0,
+      "signal_peak_retention_fraction": 0.7098484979356331,
+      "ratio_peak_shift_channels": 0
+    },
+    {
+      "mode": 12,
+      "species": "O2+",
+      "start_utc": "2024-05-04T06:40:00Z",
+      "stop_utc": "2024-05-04T06:45:00Z",
+      "figure": "signal/mode12_O2plus_signal01_20240504T064000.png",
+      "figure_sha256": "96dfad28517afd2f2aac98de50e05d911a60de3f38249e012a5906429568bdc4",
+      "strength_tier": "strong_20x",
+      "maximum_median_channel_signal_to_background": 35.57986533926122,
+      "signal_peak_retention_fraction": 0.9691824936051336,
+      "ratio_peak_shift_channels": 0
+    }
+  ],
+  "omitted_review_intermediates": "Noise-reference files, rejected-candidate rows, per-interval review results, scores, local paths, and source hashes are intentionally not distributed."
+}

@@ -11,7 +11,13 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from highE.constants import DEFAULT_OUTPUT_ROOT
 from highE.minpa_background import load_background_model
-from highE.tw1_minpa import SkipDay, Tw1Paths, process_tw1_day
+from highE.minpa_multimode_background import load_multimode_model_bundle
+from highE.tw1_minpa import (
+    SkipDay,
+    Tw1Paths,
+    load_unified_static_background_bundle,
+    process_tw1_day,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,11 +35,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--high-energy-min-eV", type=float, default=1000.0)
     parser.add_argument(
         "--background-policy",
-        choices=("none", "subtract-and-reject-uv"),
+        choices=(
+            "none",
+            "subtract-and-reject-uv",
+            "paper-channel-subtract",
+            "multimode-paper-channel-subtract",
+            "all-approved-static-channel-subtract",
+        ),
         default="none",
         help="Default 'none' is bitwise-compatible; correction must be selected explicitly.",
     )
     parser.add_argument("--background-model", type=Path)
+    parser.add_argument(
+        "--multimode-background-bundle",
+        type=Path,
+        help="Frozen v2.0.0 Mode-4/12 bundle; rc1 review manifests are refused.",
+    )
+    parser.add_argument(
+        "--static-background-bundle",
+        type=Path,
+        help="Frozen v2.2.0 all-approved Mode-1/4/12 static bundle.",
+    )
     parser.add_argument(
         "--allow-provisional-background-model",
         action="store_true",
@@ -57,6 +79,17 @@ def main() -> int:
     background_model = (
         load_background_model(args.background_model) if args.background_model is not None else None
     )
+    multimode_models = (
+        load_multimode_model_bundle(args.multimode_background_bundle)
+        if args.multimode_background_bundle is not None
+        else None
+    )
+    if args.static_background_bundle is not None:
+        if args.background_model is not None or args.multimode_background_bundle is not None:
+            raise ValueError("Static bundle cannot be combined with separate background model arguments")
+        background_model, multimode_models = load_unified_static_background_bundle(
+            args.static_background_bundle
+        )
     try:
         _, summary = process_tw1_day(
             args.date,
@@ -66,7 +99,11 @@ def main() -> int:
             write_output=not args.no_write,
             background_policy=args.background_policy,
             background_model=background_model,
-            background_model_path=args.background_model,
+            background_model_path=args.static_background_bundle or args.background_model,
+            multimode_background_models=multimode_models,
+            multimode_background_bundle_path=(
+                args.static_background_bundle or args.multimode_background_bundle
+            ),
             allow_provisional_background_model=args.allow_provisional_background_model,
         )
     except SkipDay as exc:
