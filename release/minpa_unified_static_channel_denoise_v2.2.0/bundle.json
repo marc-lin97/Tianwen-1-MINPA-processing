@@ -1,0 +1,59 @@
+{
+  "bundle_version": "minpa-unified-static-channel-denoise-v2.2.0",
+  "correction": "corrected=max(raw_dpf-background_dpf,0); NaN preserved",
+  "created_utc": "2026-08-14T03:23:39Z",
+  "default_policy": "none",
+  "dimension_order": [
+    "energy",
+    "pitch",
+    "azimuth",
+    "mass"
+  ],
+  "mode7_policy": "preserve raw",
+  "models": {
+    "1": {
+      "algorithm_version": "minpa-background-dpf-mode1-v2-paper-channel",
+      "model_kind": "mode1",
+      "path": "models/minpa_mode01_background_v1.2.0.npz",
+      "policy_version": "minpa-paper-channel-denoise-v1.2.0",
+      "sha256": "5436381e79c3ab52bc9e959534e638244634df74cb01d477edd4f5edb3673835"
+    },
+    "12": {
+      "algorithm_version": "minpa-multimode-background-dpf-v2.0.0",
+      "model_kind": "multimode",
+      "path": "models/minpa_mode12_background_v2.0.0.npz",
+      "sha256": "6b0a852c6323535b5adab6e3cacf62a04de25ee0487270d74b7366d4a63a3c68"
+    },
+    "4": {
+      "algorithm_version": "minpa-multimode-background-dpf-v2.0.0",
+      "model_kind": "multimode",
+      "path": "models/minpa_mode04_background_v2.0.0.npz",
+      "sha256": "7900124ee156d93d0c72dc6d1f1e3004acffd5079154156f7dd1fc0c6dd2dc8b"
+    }
+  },
+  "primary_estimator": "b_jc=mean(x_tc | finite x_tc>0); B_c=mean_j(b_jc), equal weight for every unique approved interval",
+  "production_policy": "all-approved-static-channel-subtract",
+  "review_inventories": {
+    "mode04_mode12": {
+      "approved_species_intervals": 2901,
+      "path": "C:\\Users\\Administrator\\Documents\\-E_highE_O+\\outputs\\minpa_multimode_noise_review_secondary_prefilter_v2\\manual_review_final.json",
+      "sha256": "089993e253ba089a4e6201c0062f03c7e8a6a324d0698372111eb910a9ba0821"
+    },
+    "mode1": {
+      "imported_approved_count": 295,
+      "path": "review_inventory/mode1_all_approved.json",
+      "sha256": "92b5dd17ae8ea8cf4536c58d0e082b491dac8ca75da2b074e7320f669c6e7180",
+      "unique_approved_count": 273
+    }
+  },
+  "status": "frozen",
+  "support_policy": {
+    "cross_mass_substitution": "forbidden",
+    "interpolation": "forbidden",
+    "low_support": "subtract and flag",
+    "supported": "subtract",
+    "unsupported": "preserve raw"
+  },
+  "temporal_policy": "none; one static channel background per mode",
+  "units": "1/(s cm^2 sr eV)"
+}

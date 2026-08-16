@@ -24,7 +24,8 @@ import numpy as np
 from scipy.io import loadmat
 
 
-ALGORITHM_VERSION = "minpa-background-dpf-mode1-v1"
+ALGORITHM_VERSION = "minpa-background-dpf-mode1-v2-paper-channel"
+DENOISE_POLICY_VERSION = "minpa-paper-channel-denoise-v1.1.0"
 MODE1_ENERGY_EV = np.array(
     [
         2.81, 3.548928, 4.482167, 5.660813, 7.149401, 9.029433,
@@ -50,6 +51,17 @@ MODE1_FLAT_SIZE = int(np.prod(MODE1_SHAPE))
 # candidates.  Bit 5 is also retained under the relaxed background policy; its
 # rate and amplitude remain available as diagnostics rather than a hard veto.
 PROJECT_BACKGROUND_REJECT_MASK = np.uint32(4 | 8)
+SUPPORT_UNSUPPORTED = np.uint8(0)
+SUPPORT_LOW = np.uint8(1)
+SUPPORT_SUPPORTED = np.uint8(2)
+
+
+class ApprovedIntervalList(list["BackgroundInterval"]):
+    """List-compatible approved intervals carrying an auditable import summary."""
+
+    def __init__(self, values: Iterable["BackgroundInterval"], import_summary: Mapping[str, int]):
+        super().__init__(values)
+        self.import_summary = dict(import_summary)
 
 
 @dataclass(frozen=True)
@@ -85,14 +97,29 @@ def approved_intervals_from_manual_review(
 
     original_items = list(original_candidates["intervals"])
     expanded_item_list = list(expanded_candidates["intervals"])
-    expanded_by_original = {
-        int(item["original_candidate_number"]): item
-        for item in expanded_item_list
-        if item.get("original_candidate_number") is not None
-    }
+    expanded_by_original: dict[int, Mapping[str, Any]] = {}
+    for item in expanded_item_list:
+        if item.get("original_candidate_number") is None:
+            continue
+        number = int(item["original_candidate_number"])
+        if number in expanded_by_original:
+            raise ValueError(f"Multiple expanded candidates resolve to original candidate {number}")
+        expanded_by_original[number] = item
     original_numbers = {
         int(value) for value in review["decisions"]["approve_no_visible_real_spectrum"]
     }
+    original_rejected = {
+        int(value)
+        for value in review["decisions"].get("reject_visible_or_weak_real_spectrum", [])
+    }
+    if original_numbers & original_rejected:
+        raise ValueError(
+            "Original candidates both approved and rejected: "
+            f"{sorted(original_numbers & original_rejected)}"
+        )
+    for number in original_numbers | original_rejected:
+        if not 1 <= number <= len(original_items):
+            raise ValueError(f"Original candidate number out of range: {number}")
     intervals: list[BackgroundInterval] = []
     for number in sorted(original_numbers):
         if not 1 <= number <= len(original_items):
@@ -120,10 +147,12 @@ def approved_intervals_from_manual_review(
             source=source,
         ))
 
-    expanded_items = {
-        int(item["expanded_candidate_number"]): item
-        for item in expanded_item_list
-    }
+    expanded_items: dict[int, Mapping[str, Any]] = {}
+    for item in expanded_item_list:
+        number = int(item["expanded_candidate_number"])
+        if number in expanded_items:
+            raise ValueError(f"Duplicate expanded candidate number: {number}")
+        expanded_items[number] = item
     expanded_review = review.get("expanded_review", {}).get("decisions", {})
     full_numbers = {int(value) for value in expanded_review.get("approve_full_interval", [])}
     rejected_numbers = {
@@ -134,6 +163,8 @@ def approved_intervals_from_manual_review(
     adjusted_numbers = {
         int(item["expanded_candidate_number"]) for item in adjusted_items
     }
+    if len(adjusted_numbers) != len(adjusted_items):
+        raise ValueError("An expanded candidate has multiple adjusted approvals")
     conflicts = (full_numbers & rejected_numbers) | (adjusted_numbers & rejected_numbers)
     if conflicts:
         raise ValueError(f"Expanded candidates both approved and rejected: {sorted(conflicts)}")
@@ -142,6 +173,9 @@ def approved_intervals_from_manual_review(
             "Expanded candidates cannot be both full and adjusted approvals: "
             f"{sorted(full_numbers & adjusted_numbers)}"
         )
+    for number in full_numbers | rejected_numbers | adjusted_numbers:
+        if number not in expanded_items:
+            raise ValueError(f"Expanded candidate number not found: {number}")
 
     for number in sorted(full_numbers):
         if number not in expanded_items:
@@ -178,13 +212,70 @@ def approved_intervals_from_manual_review(
         ))
 
     intervals.sort(key=lambda interval: (interval.start_s, interval.stop_s))
+    imported_count = len(intervals)
+    seen: set[tuple[float, float]] = set()
+    unique: list[BackgroundInterval] = []
+    for interval in intervals:
+        key = (interval.start_s, interval.stop_s)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(interval)
+    return ApprovedIntervalList(
+        unique,
+        {
+            "imported_approved_count": imported_count,
+            "deduplicated_count": imported_count - len(unique),
+            "unique_approved_count": len(unique),
+        },
+    )
+
+
+def approved_intervals_from_review_inventory(
+    review: Mapping[str, Any],
+) -> list[BackgroundInterval]:
+    """Load explicit approved intervals from a finalized review inventory."""
+
+    if review.get("review_status") != "finalized":
+        raise ValueError("Review inventory is not finalized")
+    items = list(review.get("approved_intervals", []))
+    intervals: list[BackgroundInterval] = []
+    labels: set[str] = set()
+    for item in items:
+        label = str(item["label"])
+        if label in labels:
+            raise ValueError(f"Duplicate approved interval label: {label}")
+        labels.add(label)
+        start_utc, stop_utc = str(item["start_utc"]), str(item["stop_utc"])
+        if _parse_utc(stop_utc) <= _parse_utc(start_utc):
+            raise ValueError(f"Approved interval has non-positive duration: {label}")
+        intervals.append(BackgroundInterval(
+            start_utc=start_utc,
+            stop_utc=stop_utc,
+            approved=True,
+            label=label,
+            source=str(item.get("source", "finalized_manual_review")),
+        ))
+    intervals.sort(key=lambda interval: (interval.start_s, interval.stop_s, interval.label))
+    unique: list[BackgroundInterval] = []
     seen: set[tuple[float, float]] = set()
     for interval in intervals:
         key = (interval.start_s, interval.stop_s)
         if key in seen:
-            raise ValueError(f"Duplicate approved interval: {interval.start_utc}--{interval.stop_utc}")
+            continue
         seen.add(key)
-    return intervals
+        unique.append(interval)
+    expected = int(review.get("counts", {}).get("approved", len(items)))
+    if expected != len(items):
+        raise ValueError("Approved interval count disagrees with review inventory summary")
+    return ApprovedIntervalList(
+        unique,
+        {
+            "imported_approved_count": len(items),
+            "deduplicated_count": len(items) - len(unique),
+            "unique_approved_count": len(unique),
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -194,6 +285,7 @@ class BackgroundConfig:
     mode: int = 1
     primary_estimator: Literal[
         "robust_including_zero_median", "paper_nonzero_mean",
+        "paper_channel_nonzero_mean",
         "count_equivalent_energy_pooled",
     ] = "robust_including_zero_median"
     reject_quality_mask: int = int(PROJECT_BACKGROUND_REJECT_MASK)
@@ -204,6 +296,14 @@ class BackgroundConfig:
     min_total_records: int = 300
     min_records_per_interval: int = 18
     min_channel_samples: int = 20
+    minimum_interval_duration_s: float = 0.0
+    maximum_interval_duration_s: float = math.inf
+    paper_low_support_min_intervals: int = 3
+    paper_low_support_min_nonzero_samples: int = 5
+    paper_bootstrap_replicates: int = 5_000
+    paper_bootstrap_seed: int = 2024070801
+    paper_pdf_path: str = ""
+    denoise_policy_version: str = DENOISE_POLICY_VERSION
     uncertainty_mad_scale: float = 1.4826
     quantum_min_nonzero_samples: int = 5
     quantum_residual_tolerance_counts: float = 0.05
@@ -298,11 +398,23 @@ class MinpaBackgroundModel:
     quantum_reconstruction_valid_fraction: np.ndarray
     uncertainty_dpf: np.ndarray
     interval_mad_dpf: np.ndarray
+    interval_support_count: np.ndarray
+    zero_fraction: np.ndarray
+    positive_fraction: np.ndarray
+    case_standard_deviation_dpf: np.ndarray
+    case_standard_error_dpf: np.ndarray
+    nonzero_median_dpf: np.ndarray
+    nonzero_mad_dpf: np.ndarray
+    bootstrap_ci_low_dpf: np.ndarray
+    bootstrap_ci_high_dpf: np.ndarray
+    support_level: np.ndarray
     sample_count: np.ndarray
     nonzero_sample_count: np.ndarray
     valid_channel_mask: np.ndarray
     interval_summaries: list[dict[str, object]]
     approved_intervals: list[dict[str, object]]
+    interval_import_summary: dict[str, int]
+    provenance: dict[str, object]
     source_files: list[str]
     source_sha256: dict[str, str]
     primary_estimator: str
@@ -322,7 +434,11 @@ class MinpaBackgroundModel:
             "count_equivalent_background_dpf", "dpf_quantum",
             "background_lambda_count_equivalent", "quantum_valid_mask",
             "quantum_reconstruction_valid_fraction", "uncertainty_dpf", "interval_mad_dpf", "sample_count",
-            "nonzero_sample_count", "valid_channel_mask",
+            "interval_support_count", "zero_fraction", "positive_fraction",
+            "case_standard_deviation_dpf", "case_standard_error_dpf",
+            "nonzero_median_dpf", "nonzero_mad_dpf", "bootstrap_ci_low_dpf",
+            "bootstrap_ci_high_dpf", "support_level", "nonzero_sample_count",
+            "valid_channel_mask",
         ):
             if np.asarray(getattr(self, name)).shape != MODE1_SHAPE:
                 raise ValueError(f"{name} must have shape {MODE1_SHAPE}")
@@ -335,8 +451,12 @@ class BackgroundCorrectionResult:
     removed_dpf: np.ndarray
     background_fraction: np.ndarray
     background_dominated_mask: np.ndarray
+    applied_channel_mask: np.ndarray
+    support_level: np.ndarray
+    uncertainty_dpf: np.ndarray
     model_valid: bool
     model_version: str
+    denoise_policy_version: str
 
 
 @dataclass(frozen=True)
@@ -372,6 +492,49 @@ class UvDetectionResult:
     algorithm_version: str = ALGORITHM_VERSION
 
 
+def _bootstrap_channel_mean_ci(
+    interval_values: np.ndarray,
+    *,
+    replicates: int,
+    seed: int,
+    chunk_channels: int = 256,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return deterministic interval-resampling CIs without a giant 3-D array."""
+
+    values = np.asarray(interval_values, dtype=float)
+    if values.ndim != 2:
+        raise ValueError("interval_values must have shape (interval, channel)")
+    low = np.full(values.shape[1], np.nan, dtype=float)
+    high = np.full(values.shape[1], np.nan, dtype=float)
+    if replicates <= 0 or values.shape[0] < 2:
+        return low, high
+    finite = np.isfinite(values)
+    # Equal masks share the same set of supported intervals and can therefore
+    # use one bootstrap index matrix.  packbits also works when >64 intervals
+    # are eventually approved.
+    packed = np.packbits(finite.T, axis=1)
+    _, inverse = np.unique(packed, axis=0, return_inverse=True)
+    rng = np.random.default_rng(seed)
+    for group in range(int(inverse.max()) + 1 if inverse.size else 0):
+        channel_indices = np.flatnonzero(inverse == group)
+        if channel_indices.size == 0:
+            continue
+        interval_indices = np.flatnonzero(finite[:, channel_indices[0]])
+        support = interval_indices.size
+        if support < 2:
+            continue
+        sample_indices = rng.integers(0, support, size=(replicates, support))
+        weights = np.zeros((replicates, support), dtype=np.float32)
+        rows = np.repeat(np.arange(replicates), support)
+        np.add.at(weights, (rows, sample_indices.reshape(-1)), 1.0 / support)
+        for start in range(0, channel_indices.size, chunk_channels):
+            selected = channel_indices[start : start + chunk_channels]
+            bootstrap = weights @ values[np.ix_(interval_indices, selected)]
+            low[selected] = np.quantile(bootstrap, 0.025, axis=0)
+            high[selected] = np.quantile(bootstrap, 0.975, axis=0)
+    return low, high
+
+
 def estimate_background(
     records: MinpaMode1Records,
     approved_intervals: Sequence[BackgroundInterval],
@@ -387,7 +550,29 @@ def estimate_background(
     cfg = config or BackgroundConfig()
     if cfg.mode != 1 or records.mode != 1:
         raise ValueError("The first background model is restricted to MINPA Mode 1")
+    allowed_estimators = {
+        "robust_including_zero_median",
+        "paper_nonzero_mean",
+        "paper_channel_nonzero_mean",
+        "count_equivalent_energy_pooled",
+    }
+    if cfg.primary_estimator not in allowed_estimators:
+        raise ValueError(f"Unknown primary background estimator: {cfg.primary_estimator!r}")
+    paper_estimator = cfg.primary_estimator in (
+        "paper_nonzero_mean", "paper_channel_nonzero_mean"
+    )
     intervals = [interval for interval in approved_intervals if interval.approved]
+    import_summary = dict(
+        getattr(
+            approved_intervals,
+            "import_summary",
+            {
+                "imported_approved_count": len(intervals),
+                "deduplicated_count": 0,
+                "unique_approved_count": len(intervals),
+            },
+        )
+    )
     interval_zero_means: list[np.ndarray] = []
     interval_nonzero_means: list[np.ndarray] = []
     interval_summaries: list[dict[str, object]] = []
@@ -403,6 +588,9 @@ def estimate_background(
         project_flag = records.project_quality_flag[in_time]
         project_bad = project_available & ((project_flag & np.uint32(cfg.reject_quality_mask)) != 0)
         reasons: list[str] = []
+        duration_s = interval.stop_s - interval.start_s
+        if not cfg.minimum_interval_duration_s <= duration_s <= cfg.maximum_interval_duration_s:
+            reasons.append("duration_outside_target_range")
         if cfg.require_project_quality and (n_raw == 0 or not np.all(project_available)):
             reasons.append("project_quality_unavailable")
         if cfg.reject_interval_if_project_flagged and np.any(project_bad):
@@ -468,11 +656,63 @@ def estimate_background(
         interval_center = np.nanmedian(zero_stack, axis=0)
         mad = np.nanmedian(np.abs(zero_stack - interval_center), axis=0)
         uncertainty = cfg.uncertainty_mad_scale * mad / math.sqrt(len(interval_zero_means))
+        interval_support_count = np.isfinite(nonzero_stack).sum(axis=0).astype(np.int32)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            case_std = np.nanstd(nonzero_stack, axis=0, ddof=1)
+        case_std[interval_support_count < 2] = np.nan
+        case_sem = np.divide(
+            case_std,
+            np.sqrt(interval_support_count),
+            out=np.full(MODE1_SHAPE, np.nan),
+            where=interval_support_count >= 2,
+        )
+        ci_low_flat, ci_high_flat = _bootstrap_channel_mean_ci(
+            nonzero_stack.reshape(nonzero_stack.shape[0], -1),
+            replicates=cfg.paper_bootstrap_replicates if paper_estimator else 0,
+            seed=cfg.paper_bootstrap_seed,
+        )
+        ci_low = ci_low_flat.reshape(MODE1_SHAPE)
+        ci_high = ci_high_flat.reshape(MODE1_SHAPE)
     else:
         robust = np.full(MODE1_SHAPE, np.nan)
         paper = np.full(MODE1_SHAPE, np.nan)
         mad = np.full(MODE1_SHAPE, np.nan)
         uncertainty = np.full(MODE1_SHAPE, np.nan)
+        interval_support_count = np.zeros(MODE1_SHAPE, dtype=np.int32)
+        case_std = np.full(MODE1_SHAPE, np.nan)
+        case_sem = np.full(MODE1_SHAPE, np.nan)
+        ci_low = np.full(MODE1_SHAPE, np.nan)
+        ci_high = np.full(MODE1_SHAPE, np.nan)
+
+    accepted_values = np.asarray(records.dpf[accepted_record_mask], dtype=float)
+    if accepted_values.size:
+        positive_values = np.where(
+            np.isfinite(accepted_values) & (accepted_values > 0.0),
+            accepted_values,
+            np.nan,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            nonzero_median = np.nanmedian(positive_values, axis=0)
+            nonzero_mad = np.nanmedian(
+                np.abs(positive_values - nonzero_median[None, ...]), axis=0
+            )
+    else:
+        nonzero_median = np.full(MODE1_SHAPE, np.nan)
+        nonzero_mad = np.full(MODE1_SHAPE, np.nan)
+    zero_fraction = np.divide(
+        total_sample_count - total_nonzero_count,
+        total_sample_count,
+        out=np.full(MODE1_SHAPE, np.nan),
+        where=total_sample_count > 0,
+    )
+    positive_fraction = np.divide(
+        total_nonzero_count,
+        total_sample_count,
+        out=np.full(MODE1_SHAPE, np.nan),
+        where=total_sample_count > 0,
+    )
 
     (
         count_background,
@@ -487,24 +727,83 @@ def estimate_background(
 
     if cfg.primary_estimator == "robust_including_zero_median":
         background = robust
-    elif cfg.primary_estimator == "paper_nonzero_mean":
+    elif cfg.primary_estimator in ("paper_nonzero_mean", "paper_channel_nonzero_mean"):
         background = paper
+        uncertainty = case_sem
     else:
         background = count_background
         uncertainty = count_uncertainty
-    valid_channel = (
-        np.isfinite(background)
-        & (background >= 0.0)
-        & (total_sample_count >= cfg.min_channel_samples)
+    if paper_estimator:
+        valid_channel = (
+            np.isfinite(background)
+            & (background >= 0.0)
+            & (total_nonzero_count > 0)
+        )
+    else:
+        valid_channel = (
+            np.isfinite(background)
+            & (background >= 0.0)
+            & (total_sample_count >= cfg.min_channel_samples)
+        )
+    support_level = np.full(MODE1_SHAPE, SUPPORT_UNSUPPORTED, dtype=np.uint8)
+    low_support = valid_channel & (
+        (interval_support_count < cfg.paper_low_support_min_intervals)
+        | (total_nonzero_count < cfg.paper_low_support_min_nonzero_samples)
     )
+    support_level[low_support] = SUPPORT_LOW
+    support_level[valid_channel & ~low_support] = SUPPORT_SUPPORTED
     invalid_reasons: list[str] = []
-    if len(interval_zero_means) < cfg.min_approved_intervals:
-        invalid_reasons.append("too_few_accepted_intervals")
-    if accepted_records < cfg.min_total_records:
-        invalid_reasons.append("too_few_accepted_records")
-    if not np.all(valid_channel):
-        invalid_reasons.append("one_or_more_channels_insufficient")
+    if paper_estimator:
+        if not interval_zero_means:
+            invalid_reasons.append("no_quality_accepted_intervals")
+        if accepted_records <= 0:
+            invalid_reasons.append("no_quality_accepted_records")
+        if not np.any(valid_channel):
+            invalid_reasons.append("no_channels_with_nonzero_support")
+    else:
+        if len(interval_zero_means) < cfg.min_approved_intervals:
+            invalid_reasons.append("too_few_accepted_intervals")
+        if accepted_records < cfg.min_total_records:
+            invalid_reasons.append("too_few_accepted_records")
+        if not np.all(valid_channel):
+            invalid_reasons.append("one_or_more_channels_insufficient")
     valid = not invalid_reasons
+
+    source_metadata: list[dict[str, object]] = []
+    for value in records.source_files:
+        source_path = Path(value)
+        source_metadata.append({
+            "path": str(source_path.resolve()) if source_path.exists() else str(source_path),
+            "sha256": records.source_sha256.get(value, records.source_sha256.get(str(source_path), "")),
+            "modified_utc": (
+                datetime.fromtimestamp(source_path.stat().st_mtime, UTC).isoformat()
+                if source_path.exists()
+                else None
+            ),
+        })
+    paper_path = Path(cfg.paper_pdf_path) if cfg.paper_pdf_path else None
+    provenance: dict[str, object] = {
+        "source_files": source_metadata,
+        "paper_pdf_path": str(paper_path.resolve()) if paper_path and paper_path.exists() else cfg.paper_pdf_path,
+        "paper_pdf_sha256": sha256_file(paper_path) if paper_path and paper_path.exists() else None,
+        "record_time_coverage_utc": (
+            [_format_utc(np.nanmin(records.time_unix_s)), _format_utc(np.nanmax(records.time_unix_s))]
+            if records.time_unix_s.size
+            else None
+        ),
+        "units_interpretation": "Ion_Count audited as released differential particle flux, not raw detector counts",
+        "quality_policy": {
+            "project_reject_mask": int(cfg.reject_quality_mask),
+            "require_project_quality": cfg.require_project_quality,
+            "require_native_quality_zero": cfg.require_native_quality_zero,
+            "reject_interval_if_project_flagged": cfg.reject_interval_if_project_flagged,
+        },
+        "mode": 1,
+        "dimension_order": ["energy", "pitch", "azimuth", "mass"],
+        "shape": list(MODE1_SHAPE),
+        "algorithm_version": ALGORITHM_VERSION,
+        "denoise_policy_version": cfg.denoise_policy_version,
+    }
 
     return MinpaBackgroundModel(
         background_dpf=background,
@@ -517,11 +816,27 @@ def estimate_background(
         quantum_reconstruction_valid_fraction=quantum_valid_fraction,
         uncertainty_dpf=uncertainty,
         interval_mad_dpf=mad,
+        interval_support_count=interval_support_count,
+        zero_fraction=zero_fraction,
+        positive_fraction=positive_fraction,
+        case_standard_deviation_dpf=case_std,
+        case_standard_error_dpf=case_sem,
+        nonzero_median_dpf=nonzero_median,
+        nonzero_mad_dpf=nonzero_mad,
+        bootstrap_ci_low_dpf=ci_low,
+        bootstrap_ci_high_dpf=ci_high,
+        support_level=support_level,
         sample_count=total_sample_count,
         nonzero_sample_count=total_nonzero_count,
         valid_channel_mask=valid_channel,
         interval_summaries=interval_summaries,
         approved_intervals=[asdict(interval) for interval in intervals],
+        interval_import_summary={
+            **import_summary,
+            "quality_accepted_count": len(interval_zero_means),
+            "quality_rejected_count": len(intervals) - len(interval_zero_means),
+        },
+        provenance=provenance,
         source_files=list(records.source_files),
         source_sha256=dict(records.source_sha256),
         primary_estimator=cfg.primary_estimator,
@@ -546,23 +861,34 @@ def apply_background(
     if require_valid_model and not model.valid:
         raise ValueError(f"Refusing invalid background model: {model.invalid_reasons}")
     background = np.broadcast_to(model.background_dpf, raw.shape)
-    finite = np.isfinite(raw) & np.isfinite(background)
-    corrected = np.full(raw.shape, np.nan, dtype=float)
+    channel_supported = np.broadcast_to(model.valid_channel_mask, raw.shape)
+    finite_raw = np.isfinite(raw)
+    finite = finite_raw & np.isfinite(background) & channel_supported
+    corrected = raw.copy()
     corrected[finite] = np.maximum(raw[finite] - background[finite], 0.0)
     removed = np.full(raw.shape, np.nan, dtype=float)
+    removed[finite_raw] = 0.0
     removed[finite] = raw[finite] - corrected[finite]
     fraction = np.full(raw.shape, np.nan, dtype=float)
-    positive_raw = finite & (raw > 0.0)
+    positive_raw = finite_raw & (raw > 0.0)
+    fraction[positive_raw] = 0.0
     fraction[positive_raw] = removed[positive_raw] / raw[positive_raw]
-    dominated = finite & (raw <= background + np.broadcast_to(model.uncertainty_dpf, raw.shape))
+    uncertainty = np.broadcast_to(model.uncertainty_dpf, raw.shape)
+    dominated = finite & (raw <= background + uncertainty)
     return BackgroundCorrectionResult(
         raw_dpf=raw,
         corrected_dpf=corrected,
         removed_dpf=removed,
         background_fraction=fraction,
         background_dominated_mask=dominated,
+        applied_channel_mask=finite,
+        support_level=np.broadcast_to(model.support_level, raw.shape),
+        uncertainty_dpf=uncertainty,
         model_valid=model.valid,
         model_version=model.algorithm_version,
+        denoise_policy_version=str(
+            model.provenance.get("denoise_policy_version", DENOISE_POLICY_VERSION)
+        ),
     )
 
 
@@ -1323,6 +1649,8 @@ def save_background_model(path: Path, model: MinpaBackgroundModel) -> None:
         "invalid_reasons": model.invalid_reasons,
         "interval_summaries": model.interval_summaries,
         "approved_intervals": model.approved_intervals,
+        "interval_import_summary": model.interval_import_summary,
+        "provenance": model.provenance,
         "source_files": model.source_files,
         "source_sha256": model.source_sha256,
         "dimension_order": ["energy", "pitch", "azimuth", "mass"],
@@ -1340,6 +1668,16 @@ def save_background_model(path: Path, model: MinpaBackgroundModel) -> None:
         quantum_reconstruction_valid_fraction=model.quantum_reconstruction_valid_fraction,
         uncertainty_dpf=model.uncertainty_dpf,
         interval_mad_dpf=model.interval_mad_dpf,
+        interval_support_count=model.interval_support_count,
+        zero_fraction=model.zero_fraction,
+        positive_fraction=model.positive_fraction,
+        case_standard_deviation_dpf=model.case_standard_deviation_dpf,
+        case_standard_error_dpf=model.case_standard_error_dpf,
+        nonzero_median_dpf=model.nonzero_median_dpf,
+        nonzero_mad_dpf=model.nonzero_mad_dpf,
+        bootstrap_ci_low_dpf=model.bootstrap_ci_low_dpf,
+        bootstrap_ci_high_dpf=model.bootstrap_ci_high_dpf,
+        support_level=model.support_level,
         sample_count=model.sample_count,
         nonzero_sample_count=model.nonzero_sample_count,
         valid_channel_mask=model.valid_channel_mask,
@@ -1356,6 +1694,15 @@ def load_background_model(path: Path) -> MinpaBackgroundModel:
 
     with np.load(path, allow_pickle=False) as data:
         metadata = json.loads(str(data["metadata_json"].item()))
+        shape = MODE1_SHAPE
+        def optional(name: str, default: np.ndarray) -> np.ndarray:
+            return data[name] if name in data.files else default
+
+        sample_count = data["sample_count"]
+        nonzero_count = data["nonzero_sample_count"]
+        valid_mask = data["valid_channel_mask"]
+        default_fraction = np.full(shape, np.nan)
+        default_support = np.where(valid_mask, SUPPORT_SUPPORTED, SUPPORT_UNSUPPORTED).astype(np.uint8)
         return MinpaBackgroundModel(
             background_dpf=data["background_dpf"],
             robust_background_dpf=data["robust_background_dpf"],
@@ -1367,11 +1714,23 @@ def load_background_model(path: Path) -> MinpaBackgroundModel:
             quantum_reconstruction_valid_fraction=data["quantum_reconstruction_valid_fraction"],
             uncertainty_dpf=data["uncertainty_dpf"],
             interval_mad_dpf=data["interval_mad_dpf"],
-            sample_count=data["sample_count"],
-            nonzero_sample_count=data["nonzero_sample_count"],
-            valid_channel_mask=data["valid_channel_mask"],
+            interval_support_count=optional("interval_support_count", valid_mask.astype(np.int32)),
+            zero_fraction=optional("zero_fraction", default_fraction),
+            positive_fraction=optional("positive_fraction", default_fraction),
+            case_standard_deviation_dpf=optional("case_standard_deviation_dpf", default_fraction),
+            case_standard_error_dpf=optional("case_standard_error_dpf", default_fraction),
+            nonzero_median_dpf=optional("nonzero_median_dpf", default_fraction),
+            nonzero_mad_dpf=optional("nonzero_mad_dpf", default_fraction),
+            bootstrap_ci_low_dpf=optional("bootstrap_ci_low_dpf", default_fraction),
+            bootstrap_ci_high_dpf=optional("bootstrap_ci_high_dpf", default_fraction),
+            support_level=optional("support_level", default_support),
+            sample_count=sample_count,
+            nonzero_sample_count=nonzero_count,
+            valid_channel_mask=valid_mask,
             interval_summaries=metadata["interval_summaries"],
             approved_intervals=metadata["approved_intervals"],
+            interval_import_summary=dict(metadata.get("interval_import_summary", {})),
+            provenance=dict(metadata.get("provenance", {})),
             source_files=metadata["source_files"],
             source_sha256=metadata["source_sha256"],
             primary_estimator=metadata["primary_estimator"],

@@ -1,0 +1,10 @@
+*.json text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+
+*.png binary
+*.npz binary
+
+# These files are byte-frozen release artifacts. Keep their published hashes
+# unchanged even when a checkout uses a different native line ending.
+release/minpa_unified_static_channel_denoise_v2.2.0/bundle.json binary

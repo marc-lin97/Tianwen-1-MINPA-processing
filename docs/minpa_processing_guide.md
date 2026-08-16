@@ -136,6 +136,15 @@ at estimation time.
 
 ## Background noise
 
+The frozen all-approved production release is v2.2.0 at
+`release/minpa_unified_static_channel_denoise_v2.2.0/bundle.json`. Select
+`all-approved-static-channel-subtract` with `--static-background-bundle` to
+apply one time-invariant per-channel background to Mode 1, Mode 4, and Mode 12
+in the same run. It does not use the exploratory quarterly temporal models.
+Mode 1 uses 273 exact-time unique joint approvals; Mode 4/12 retain all 2,901
+finalized species-specific approvals. Mode 7, unsupported channels, and
+unreviewed mass bins remain unchanged.
+
 Background is estimated and subtracted in four-dimensional Mode-1 DPF space,
 never as a constant removed from DEF, density, or a final map:
 
@@ -143,28 +152,33 @@ never as a constant removed from DEF, density, or a final map:
 DPF_corrected = max(DPF_raw - DPF_background, 0)
 ```
 
-The explicit CLI option `--background-model PATH` accepts only a valid Mode-1
-model whose shape matches the input.  With no model, values are unchanged.
-Models are not applied to Modes 4, 7, or 12.  UV-confirmed records should be
-excluded rather than reconstructed sector-by-sector in the first production
-version.
+The explicit CLI option `--background-model PATH` accepts only the frozen
+Mode-1 model whose shape matches the input. With no model, values are
+unchanged. The separate policy `multimode-paper-channel-subtract` accepts only
+a finalized, hash-verified Mode-4/12 bundle. The frozen v2.0.0 bundle is
+`outputs/minpa_multimode_channel_denoise_v2.0.0/bundle.json`; rc1 and prefilter
+candidate workspaces remain review-only and are refused by the production
+path. Mode 7, unreviewed Mode-4/12 mass bins, and unsupported channels remain
+unchanged. Low-support reviewed channels are subtracted and explicitly marked.
+UV-confirmed Mode-1 records are excluded rather than reconstructed
+sector-by-sector.
 
-Current evidence must be interpreted carefully:
-
-- 19 manually reviewed Mode-1 intervals are available, below the production
-  requirement of 20 intervals, 300 records, and 5 independent days;
-- 244 accepted intervals exist in the exploratory full-mission analysis, but
-  225 are automatic cross-year candidates and may retain real O+/O2+ structure;
-- a typical one-dimensional DEF reference is about `5e3`, with `1e4
-  1/(s cm^2 sr)` as a robust upper audit reference for 5--10 minute averaged
-  spectra; it is not a pointwise subtraction constant;
-- one nonzero four-dimensional quantization event can be much larger than this
-  after projection, so temporal and energy coherence are required.
+The historical frozen Mode-1 v1.1.0 calibration contains 175 approved entries,
+153 exact-time-deduplicated intervals, and 4,350 records. It is not rebuilt by
+the multimode work. Mode 4/12 use independent H+, O+, and O2+ candidate lists;
+automatic low-tail classification never constitutes approval.
 
 See [`method_minpa_background_reproduction.md`](method_minpa_background_reproduction.md)
 and [`method_minpa_background_temporal.md`](method_minpa_background_temporal.md)
 for interval selection, zero-inclusive statistics, uncertainty, and temporal
-variation analysis.
+variation analysis. See
+[`method_minpa_multimode_noise_denoise.md`](method_minpa_multimode_noise_denoise.md)
+for the review workflow, layouts, mass-bin scope, release gates, and rollback
+rules. See
+[`release_minpa_multimode_denoise_v2.0.0.md`](release_minpa_multimode_denoise_v2.0.0.md)
+for finalized review counts, model hashes, channel support, and validation.
+The superseding all-approved static release is documented in
+[`release_minpa_unified_static_denoise_v2.2.0.md`](release_minpa_unified_static_denoise_v2.2.0.md).
 
 ## VDF figure
 

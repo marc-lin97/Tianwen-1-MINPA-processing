@@ -1,0 +1,16 @@
+{
+  "release_version": "minpa-multimode-channel-denoise-v2.0.0",
+  "review_inventory": "outputs/minpa_multimode_noise_review_secondary_prefilter_v2/manual_review_final.json",
+  "output_root": "outputs/minpa_multimode_channel_denoise_v2.0.0",
+  "work_root": "outputs/minpa_multimode_channel_denoise_v2.0.0_work",
+  "bootstrap_replicates": 5000,
+  "bootstrap_seed": 2026081001,
+  "benchmark_file_count": 100,
+  "parallel_workers": 2,
+  "parallel_speedup_required": 1.1,
+  "median_channel_chunk": 64,
+  "minimum_duration_s": 300,
+  "maximum_duration_s": 600,
+  "units": "1/(s cm^2 sr eV)",
+  "primary_estimator": "paper_channel_nonzero_mean_by_species"
+}

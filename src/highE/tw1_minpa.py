@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 import h5py
 import numpy as np
@@ -34,15 +34,24 @@ from .coordinates import (
     unix_s_to_utc_text,
 )
 from .minpa_background import (
+    DENOISE_POLICY_VERSION,
     MODE1_SHAPE,
     MinpaBackgroundModel,
     UvDetectionConfig,
     apply_background,
     detect_uv_contamination,
+    load_background_model,
     load_project_quality_for_times,
+    sha256_file,
 )
 from .minpa_io import read_public_records as read_public_product_records
 from .minpa_modes import angular_geometry, energy_bin_widths_eV, minpa_directions, minpa_to_body_direction, mode_layout, species_mass_indices, split_raw_record
+from .minpa_multimode_background import (
+    MultimodeBackgroundModel,
+    apply_multimode_background,
+    load_multimode_background_model,
+    mode_channel_shape,
+)
 
 
 EV_J = 1.602176634e-19
@@ -54,7 +63,13 @@ DEFAULT_PROJECT_QUALITY_ROOT = (
     / "outputs"
     / "tw1_minpa_quality_flags_all_species"
 )
-BackgroundPolicy = Literal["none", "subtract-and-reject-uv"]
+BackgroundPolicy = Literal[
+    "none",
+    "subtract-and-reject-uv",
+    "paper-channel-subtract",
+    "multimode-paper-channel-subtract",
+    "all-approved-static-channel-subtract",
+]
 
 
 @dataclass(frozen=True)
@@ -521,6 +536,162 @@ def prepare_background_records(
     )
 
 
+def prepare_multimode_background_records(
+    modes: np.ndarray,
+    time_unix_s: np.ndarray,
+    counts: list[np.ndarray],
+    models: Mapping[int, MultimodeBackgroundModel],
+) -> PreparedBackgroundRecords:
+    """Correct finalized Mode-4/12 records after any Mode-12 raw split.
+
+    Models are selected strictly by mode. Unsupported and unreviewed mass bins
+    remain byte-for-byte numerically equal to the supplied floating values.
+    Mode 1 and Mode 7 are intentionally left untouched by this policy.
+    """
+
+    mode_values = np.asarray(modes, dtype=int).reshape(-1)
+    time = np.asarray(time_unix_s, dtype=float).reshape(-1)
+    if mode_values.size != time.size or len(counts) != time.size:
+        raise ValueError("modes, time_unix_s, and counts must have matching record counts")
+    for mode, model in models.items():
+        if int(mode) not in (4, 12) or model.mode != int(mode):
+            raise ValueError(f"Multimode bundle key/model mismatch for mode {mode}")
+        if not model.valid or model.review_status != "finalized":
+            raise ValueError(
+                f"Refusing non-finalized Mode {mode} model: {list(model.invalid_reasons)}"
+            )
+    n = time.size
+    corrected = [np.asarray(value, dtype=float).reshape(-1).copy() for value in counts]
+    applied = np.zeros(n, dtype=bool)
+    removed_fraction = np.full(n, np.nan)
+    dominated_fraction = np.full(n, np.nan)
+    for mode in (4, 12):
+        model = models.get(mode)
+        if model is None:
+            continue
+        expected = int(np.prod(mode_channel_shape(mode)))
+        indices = np.asarray(
+            [index for index, value in enumerate(corrected) if mode_values[index] == mode and value.size == expected],
+            dtype=int,
+        )
+        if not indices.size:
+            continue
+        cube = np.stack([corrected[index].reshape(model.shape) for index in indices])
+        result = apply_multimode_background(cube, model)
+        for local, record_index in enumerate(indices):
+            corrected[record_index] = result.corrected_dpf[local].reshape(-1)
+        applied[indices] = True
+        raw_sum = np.nansum(np.maximum(result.raw_dpf, 0.0), axis=(1, 2, 3, 4))
+        removed_sum = np.nansum(np.maximum(result.removed_dpf, 0.0), axis=(1, 2, 3, 4))
+        removed_fraction[indices] = np.divide(
+            removed_sum,
+            raw_sum,
+            out=np.full(indices.size, np.nan),
+            where=raw_sum > 0.0,
+        )
+        model_background = np.broadcast_to(model.background_dpf, cube.shape)
+        considered = np.isfinite(cube) & np.isfinite(model_background) & np.broadcast_to(model.valid_channel_mask, cube.shape)
+        dominated = considered & (cube <= model_background)
+        dominated_fraction[indices] = np.divide(
+            dominated.sum(axis=(1, 2, 3, 4)),
+            considered.sum(axis=(1, 2, 3, 4)),
+            out=np.full(indices.size, np.nan),
+            where=considered.sum(axis=(1, 2, 3, 4)) > 0,
+        )
+    zeros = np.zeros(n, dtype=bool)
+    return PreparedBackgroundRecords(
+        corrected_counts=corrected,
+        background_applied=applied,
+        removed_dpf_fraction=removed_fraction,
+        background_dominated_channel_fraction=dominated_fraction,
+        uv_candidate=zeros.copy(),
+        uv_algorithm_confirmed=zeros.copy(),
+        uv_confirmed=zeros.copy(),
+        uv_project_quality_flag=zeros.copy(),
+        uv_rejected=zeros.copy(),
+        uv_maximum_robust_sigma=np.full(n, np.nan),
+        uv_affected_azimuth_sector_count=np.zeros(n, dtype=np.int16),
+        project_quality_available=zeros.copy(),
+        project_quality_flag=np.zeros(n, dtype=np.uint32),
+    )
+
+
+def load_unified_static_background_bundle(
+    path: Path,
+) -> tuple[MinpaBackgroundModel, dict[int, MultimodeBackgroundModel]]:
+    """Load the frozen, time-invariant Mode-1/4/12 all-approved bundle."""
+
+    source = Path(path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    if payload.get("status") != "frozen":
+        raise ValueError("Unified static background bundle must be frozen")
+    if not str(payload.get("temporal_policy", "")).startswith("none"):
+        raise ValueError("Unified static background bundle must not use temporal scaling")
+    items = payload.get("models", {})
+    if set(items) != {"1", "4", "12"}:
+        raise ValueError("Unified static bundle must contain exactly Modes 1, 4 and 12")
+
+    def checked_path(item: Mapping[str, Any]) -> Path:
+        model_path = Path(str(item["path"]))
+        if not model_path.is_absolute():
+            model_path = source.parent / model_path
+        if sha256_file(model_path) != str(item["sha256"]):
+            raise ValueError(f"Unified static model hash mismatch: {model_path}")
+        return model_path
+
+    mode1 = load_background_model(checked_path(items["1"]))
+    if mode1.mode != 1 or not mode1.valid:
+        raise ValueError("Unified static Mode-1 model is invalid")
+    multimode: dict[int, MultimodeBackgroundModel] = {}
+    for mode in (4, 12):
+        model = load_multimode_background_model(checked_path(items[str(mode)]))
+        if model.mode != mode or not model.valid or model.review_status != "finalized":
+            raise ValueError(f"Unified static Mode-{mode} model is invalid")
+        multimode[mode] = model
+    return mode1, multimode
+
+
+def prepare_unified_static_background_records(
+    modes: np.ndarray,
+    time_unix_s: np.ndarray,
+    counts: list[np.ndarray],
+    mode1_model: MinpaBackgroundModel,
+    multimode_models: Mapping[int, MultimodeBackgroundModel],
+    *,
+    project_quality_root: Path | None = None,
+    uv_config: UvDetectionConfig | None = None,
+) -> PreparedBackgroundRecords:
+    """Apply static per-channel subtraction to Modes 1, 4 and 12 in one pass."""
+
+    mode1 = prepare_background_records(
+        modes, time_unix_s, counts, mode1_model,
+        project_quality_root=project_quality_root, uv_config=uv_config,
+    )
+    multimode = prepare_multimode_background_records(
+        modes, time_unix_s, mode1.corrected_counts, multimode_models,
+    )
+    use_multimode = multimode.background_applied
+    return PreparedBackgroundRecords(
+        corrected_counts=multimode.corrected_counts,
+        background_applied=mode1.background_applied | multimode.background_applied,
+        removed_dpf_fraction=np.where(
+            use_multimode, multimode.removed_dpf_fraction, mode1.removed_dpf_fraction
+        ),
+        background_dominated_channel_fraction=np.where(
+            use_multimode,
+            multimode.background_dominated_channel_fraction,
+            mode1.background_dominated_channel_fraction,
+        ),
+        uv_candidate=mode1.uv_candidate,
+        uv_algorithm_confirmed=mode1.uv_algorithm_confirmed,
+        uv_confirmed=mode1.uv_confirmed,
+        uv_project_quality_flag=mode1.uv_project_quality_flag,
+        uv_rejected=mode1.uv_rejected,
+        uv_maximum_robust_sigma=mode1.uv_maximum_robust_sigma,
+        uv_affected_azimuth_sector_count=mode1.uv_affected_azimuth_sector_count,
+        project_quality_available=mode1.project_quality_available,
+        project_quality_flag=mode1.project_quality_flag,
+    )
 def _empty_result(n_rows: int) -> dict[str, np.ndarray]:
     result = {
         "epoch_unix_s": np.full(n_rows, np.nan),
@@ -605,16 +776,22 @@ def process_tw1_day(
     background_policy: BackgroundPolicy = "none",
     background_model: MinpaBackgroundModel | None = None,
     background_model_path: Path | None = None,
+    multimode_background_models: Mapping[int, MultimodeBackgroundModel] | None = None,
+    multimode_background_bundle_path: Path | None = None,
     allow_provisional_background_model: bool = False,
     uv_config: UvDetectionConfig | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     started = time.perf_counter()
     paths = paths or Tw1Paths()
-    if background_policy not in ("none", "subtract-and-reject-uv"):
+    mode1_policies = {"subtract-and-reject-uv", "paper-channel-subtract"}
+    multimode_policy = "multimode-paper-channel-subtract"
+    unified_static_policy = "all-approved-static-channel-subtract"
+    correction_policies = {*mode1_policies, multimode_policy, unified_static_policy}
+    if background_policy not in {"none", *correction_policies}:
         raise ValueError(f"Unknown background_policy={background_policy!r}")
-    if background_policy != "none":
+    if background_policy in mode1_policies:
         if background_model is None:
-            raise ValueError("subtract-and-reject-uv requires an explicit background model")
+            raise ValueError(f"{background_policy} requires an explicit background model")
         if not background_model.valid:
             raise ValueError(f"Refusing invalid background model: {background_model.invalid_reasons}")
         if background_model_is_provisional(background_model) and not allow_provisional_background_model:
@@ -622,6 +799,36 @@ def process_tw1_day(
                 "The selected background model contains provisional intervals; "
                 "set allow_provisional_background_model=True only for validation products"
             )
+        if (
+            background_policy == "paper-channel-subtract"
+            and background_model.primary_estimator
+            not in ("paper_channel_nonzero_mean", "paper_nonzero_mean")
+        ):
+            raise ValueError(
+                "paper-channel-subtract requires a paper channel nonzero-mean model"
+            )
+    elif background_policy == multimode_policy:
+        if not multimode_background_models:
+            raise ValueError(
+                "multimode-paper-channel-subtract requires an explicit frozen model bundle"
+            )
+        for mode, model in multimode_background_models.items():
+            if int(mode) not in (4, 12) or model.mode != int(mode):
+                raise ValueError(f"Invalid multimode model mapping for mode {mode}")
+            if not model.valid or model.review_status != "finalized":
+                raise ValueError(
+                    f"Refusing provisional/invalid Mode {mode} model: {list(model.invalid_reasons)}"
+                )
+    elif background_policy == unified_static_policy:
+        if background_model is None or not background_model.valid:
+            raise ValueError("Unified static subtraction requires a valid Mode-1 model")
+        if background_model_is_provisional(background_model):
+            raise ValueError("Unified static subtraction refuses provisional Mode-1 models")
+        if not multimode_background_models or set(multimode_background_models) != {4, 12}:
+            raise ValueError("Unified static subtraction requires frozen Mode-4 and Mode-12 models")
+        for mode, model in multimode_background_models.items():
+            if model.mode != mode or not model.valid or model.review_status != "finalized":
+                raise ValueError(f"Unified static Mode-{mode} model is not finalized")
     source_type, source_files = source_files_for_day(date, paths)
     momag = load_momag_for_day(date, paths.momag_root)
     if momag is None:
@@ -645,13 +852,32 @@ def process_tw1_day(
     record_modes = np.asarray([minpa_mode(item[1]) for item in raw_records], dtype=np.int16)
     record_times = np.asarray([item[2] for item in raw_records], dtype=float)
     record_counts = [np.asarray(item[3], dtype=float).reshape(-1) for item in raw_records]
-    if background_policy == "subtract-and-reject-uv":
+    if background_policy in mode1_policies:
         assert background_model is not None
         prepared_background = prepare_background_records(
             record_modes,
             record_times,
             record_counts,
             background_model,
+            project_quality_root=paths.project_quality_root,
+            uv_config=uv_config,
+        )
+    elif background_policy == multimode_policy:
+        assert multimode_background_models is not None
+        prepared_background = prepare_multimode_background_records(
+            record_modes,
+            record_times,
+            record_counts,
+            multimode_background_models,
+        )
+    elif background_policy == unified_static_policy:
+        assert background_model is not None and multimode_background_models is not None
+        prepared_background = prepare_unified_static_background_records(
+            record_modes,
+            record_times,
+            record_counts,
+            background_model,
+            multimode_background_models,
             project_quality_root=paths.project_quality_root,
             uv_config=uv_config,
         )
@@ -714,7 +940,9 @@ def process_tw1_day(
                 high_energy_min_eV,
                 add_spacecraft_velocity,
             )
-            if background_policy == "subtract-and-reject-uv":
+            if background_policy in mode1_policies or (
+                background_policy == unified_static_policy and mode == 1
+            ):
                 if prepared_background.uv_rejected[record_index]:
                     density = math.nan
                     velocity_mso = np.full(3, np.nan)
@@ -722,6 +950,8 @@ def process_tw1_day(
                     status = 7
                 else:
                     density, velocity_mso, valid_cell_count, status = corrected_moment
+            elif background_policy in {multimode_policy, unified_static_policy}:
+                density, velocity_mso, valid_cell_count, status = corrected_moment
             else:
                 density, velocity_mso, valid_cell_count, status = raw_moment
             velocity_mse = r_mso_to_mse[record_index] @ velocity_mso if np.all(np.isfinite(velocity_mso)) else np.full(3, np.nan)
@@ -761,6 +991,13 @@ def process_tw1_day(
                 fov_mso,
                 fov_mse,
             )
+            record_background_model = (
+                multimode_background_models.get(mode)
+                if background_policy in {multimode_policy, unified_static_policy}
+                and mode in (4, 12)
+                and multimode_background_models is not None
+                else background_model
+            )
             _fill_background_row(
                 result,
                 row,
@@ -769,7 +1006,7 @@ def process_tw1_day(
                 r_mso_to_mse[record_index],
                 prepared_background,
                 record_index,
-                background_model,
+                record_background_model,
             )
             row += 1
 
@@ -786,6 +1023,8 @@ def process_tw1_day(
         background_policy,
         background_model,
         background_model_path,
+        multimode_background_models,
+        multimode_background_bundle_path,
         prepared_background,
     )
     summary["runtime"] = {"processing_seconds_before_write": time.perf_counter() - started}
@@ -793,6 +1032,16 @@ def process_tw1_day(
         suffix = ""
         if background_policy == "subtract-and-reject-uv":
             suffix = "_bgcorr_provisional_v1" if background_model_is_provisional(background_model) else "_bgcorr_v1"
+        elif background_policy == "paper-channel-subtract":
+            suffix = (
+                "_paperbgcorr_provisional_v2"
+                if background_model_is_provisional(background_model)
+                else "_paperbgcorr_v2"
+            )
+        elif background_policy == multimode_policy:
+            suffix = "_multimodebgcorr_v2"
+        elif background_policy == unified_static_policy:
+            suffix = "_staticbgcorr_v2_2"
         write_tw1_output(date, paths.output_root, result, summary, product_suffix=suffix)
     return result, summary
 
@@ -879,7 +1128,7 @@ def _fill_background_row(
     rotation_mso_to_mse: np.ndarray,
     prepared: PreparedBackgroundRecords,
     record_index: int,
-    model: MinpaBackgroundModel | None,
+    model: MinpaBackgroundModel | MultimodeBackgroundModel | None,
 ) -> None:
     raw_density, raw_velocity_mso, raw_cells, raw_status = raw_moment
     corrected_density, corrected_velocity_mso, corrected_cells, corrected_status = corrected_moment
@@ -1001,6 +1250,8 @@ def _summary(
     background_policy: BackgroundPolicy,
     background_model: MinpaBackgroundModel | None,
     background_model_path: Path | None,
+    multimode_background_models: Mapping[int, MultimodeBackgroundModel] | None,
+    multimode_background_bundle_path: Path | None,
     prepared_background: PreparedBackgroundRecords,
 ) -> dict[str, Any]:
     status, counts = np.unique(result["processing_status_code"], return_counts=True)
@@ -1039,6 +1290,11 @@ def _summary(
             "momag_root": str(paths.momag_root),
             "r_mso2mse": str(r_path),
             "background_model": str(background_model_path) if background_model_path else None,
+            "multimode_background_bundle": (
+                str(multimode_background_bundle_path)
+                if multimode_background_bundle_path
+                else None
+            ),
         },
         "assumptions": {
             "high_energy_min_eV": high_energy_min_eV,
@@ -1052,17 +1308,45 @@ def _summary(
             "mse_plus_z_fov_flag": "MINPA ion FOV is 360 deg in azimuth and 90 deg in polar angle, occupying the -X_body hemisphere after the payload-to-body mapping; flag=1 when transformed MSE +Z body-frame theta is inside the mode-specific MINPA pitch/theta edges",
             "minpa_fov_caveat": "MINPA has a half-FOV blind region; density and vector moments are coverage-limited when the relevant ion distribution lies partly outside the observed hemisphere",
             "background_policy": background_policy,
-            "background_subtraction": "Mode 1 only; DPF_corrected=max(DPF_raw-DPF_background,0) before moment integration",
+            "background_subtraction": (
+                "Mode 1/4/12 static approved-channel backgrounds; DPF_corrected=max(DPF_raw-DPF_background,0); no temporal scaling"
+                if background_policy == "all-approved-static-channel-subtract"
+                else
+                "Mode 4/12 reviewed species mass bins only; DPF_corrected=max(DPF_raw-DPF_background,0) after Mode-12 subrecord splitting"
+                if background_policy == "multimode-paper-channel-subtract"
+                else "Mode 1 only; DPF_corrected=max(DPF_raw-DPF_background,0) before moment integration"
+            ),
             "uv_rejection": "confirmed Mode-1 UV records are rejected as whole records; solar incidence is supporting evidence only",
-            "non_mode1_background_behavior": "Mode 4/12 records remain uncorrected because the model is Mode 1 only",
+            "non_mode1_background_behavior": (
+                "Mode 7 and all unreviewed Mode-4/12 mass bins remain uncorrected; no temporal scaling or cross-mass proxy"
+                if background_policy == "all-approved-static-channel-subtract"
+                else
+                "Mode 7 and all unreviewed Mode-4/12 mass bins remain uncorrected; no cross-mass proxy is allowed"
+                if background_policy == "multimode-paper-channel-subtract"
+                else "Mode 4/12 records remain uncorrected because the selected model is Mode 1 only"
+            ),
         },
         "background_model": {
             "supplied": background_model is not None,
             "valid": bool(background_model.valid) if background_model is not None else False,
             "algorithm_version": background_model.algorithm_version if background_model is not None else None,
             "primary_estimator": background_model.primary_estimator if background_model is not None else None,
+            "denoise_policy_version": (
+                str(background_model.provenance.get("denoise_policy_version", DENOISE_POLICY_VERSION))
+                if background_model is not None
+                else None
+            ),
             "provisional": model_provisional,
             "source_hash_count": len(background_model.source_sha256) if background_model is not None else 0,
+        },
+        "multimode_background_models": {
+            str(mode): {
+                "valid": bool(model.valid),
+                "review_status": model.review_status,
+                "algorithm_version": model.algorithm_version,
+                "primary_estimator": model.primary_estimator,
+            }
+            for mode, model in sorted((multimode_background_models or {}).items())
         },
         "records": {
             "minpa_records": len(raw_records),
@@ -1080,7 +1364,26 @@ def _summary(
                 "7": "record_rejected_as_uv_contamination",
             },
             "background_applied_mode1_records": int(
-                np.count_nonzero(prepared_background.background_applied)
+                np.count_nonzero(
+                    prepared_background.background_applied
+                    & (
+                        np.asarray(
+                            [minpa_mode(item[1]) for item in raw_records], dtype=int
+                        )
+                        == 1
+                    )
+                )
+            ),
+            "background_applied_multimode_records": int(
+                np.count_nonzero(
+                    prepared_background.background_applied
+                    & np.isin(
+                        np.asarray(
+                            [minpa_mode(item[1]) for item in raw_records], dtype=int
+                        ),
+                        [4, 12],
+                    )
+                )
             ),
             "uv_candidate_records": int(np.count_nonzero(prepared_background.uv_candidate)),
             "uv_algorithm_confirmed_records": int(

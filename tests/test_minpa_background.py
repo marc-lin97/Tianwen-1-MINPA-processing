@@ -6,6 +6,7 @@ import pytest
 from scipy.io import savemat
 
 from highE.minpa_background import (
+    DENOISE_POLICY_VERSION,
     MODE1_FLAT_SIZE,
     MODE1_ENERGY_EV,
     MODE1_SHAPE,
@@ -16,6 +17,7 @@ from highE.minpa_background import (
     aggregate_energy_count_equivalent,
     apply_background,
     approved_intervals_from_manual_review,
+    approved_intervals_from_review_inventory,
     detect_uv_contamination,
     discover_background_candidates,
     estimate_background,
@@ -61,6 +63,75 @@ def test_manual_review_resolves_full_and_adjusted_expanded_intervals() -> None:
     assert intervals[1].label == "expanded-07-adjusted"
     assert intervals[1].start_utc == "2021-12-02T07:46:00Z"
     assert intervals[2].label == "original-01"
+
+
+def test_manual_review_imports_all_deduplicates_exact_windows_and_rejects_conflicts() -> None:
+    original = {"intervals": [
+        {"start_utc": "2021-12-20T00:00:00Z", "stop_utc": "2021-12-20T00:08:00Z"},
+    ]}
+    expanded = {"intervals": [{
+        "expanded_candidate_number": 1,
+        "start_utc": "2021-12-20T00:00:00Z",
+        "stop_utc": "2021-12-20T00:08:00Z",
+    }]}
+    review = {
+        "decisions": {
+            "approve_no_visible_real_spectrum": [1],
+            "reject_visible_or_weak_real_spectrum": [],
+        },
+        "expanded_review": {"decisions": {
+            "approve_full_interval": [1],
+            "reject_visible_or_weak_real_spectrum": [],
+            "approve_adjusted_interval": [],
+        }},
+    }
+    intervals = approved_intervals_from_manual_review(review, original, expanded)
+    assert len(intervals) == 1
+    assert intervals.import_summary == {
+        "imported_approved_count": 2,
+        "deduplicated_count": 1,
+        "unique_approved_count": 1,
+    }
+
+    review["decisions"]["reject_visible_or_weak_real_spectrum"] = [1]
+    with pytest.raises(ValueError, match="both approved and rejected"):
+        approved_intervals_from_manual_review(review, original, expanded)
+
+
+def test_finalized_review_inventory_loads_all_approvals_and_deduplicates_windows() -> None:
+    review = {
+        "review_status": "finalized",
+        "counts": {"approved": 3},
+        "approved_intervals": [
+            {
+                "label": "later",
+                "start_utc": "2022-01-02T00:00:00Z",
+                "stop_utc": "2022-01-02T00:08:00Z",
+            },
+            {
+                "label": "first",
+                "start_utc": "2022-01-01T00:00:00Z",
+                "stop_utc": "2022-01-01T00:08:00Z",
+            },
+            {
+                "label": "duplicate-time",
+                "start_utc": "2022-01-01T00:00:00Z",
+                "stop_utc": "2022-01-01T00:08:00Z",
+            },
+        ],
+    }
+
+    intervals = approved_intervals_from_review_inventory(review)
+
+    assert [item.label for item in intervals] == ["duplicate-time", "later"]
+    assert intervals.import_summary == {
+        "imported_approved_count": 3,
+        "deduplicated_count": 1,
+        "unique_approved_count": 2,
+    }
+    review["review_status"] = "in_progress"
+    with pytest.raises(ValueError, match="not finalized"):
+        approved_intervals_from_review_inventory(review)
 
 
 def test_candidate_discovery_uses_segment_mode_not_num1_name(tmp_path: Path) -> None:
@@ -227,6 +298,47 @@ def test_paper_estimator_uses_conditional_positive_mean() -> None:
     )
 
     np.testing.assert_allclose(model.background_dpf, 3.0)
+
+
+def test_strict_paper_model_uses_every_interval_and_labels_channel_support() -> None:
+    cube = np.ones((6, *MODE1_SHAPE), dtype=float)
+    low = (0, 0, 0, 0)
+    unsupported = (0, 0, 0, 1)
+    supported = (0, 0, 0, 2)
+    cube[:, unsupported[0], unsupported[1], unsupported[2], unsupported[3]] = 0.0
+    cube[:, low[0], low[1], low[2], low[3]] = [1.0, 3.0, 3.0, 5.0, 0.0, 0.0]
+    cube[:, supported[0], supported[1], supported[2], supported[3]] = [1, 1, 3, 3, 5, 5]
+    records = _records([1.0] * 6)
+    records.dpf = cube
+    model = estimate_background(
+        records,
+        [_interval(0, 2, "a"), _interval(2, 4, "b"), _interval(4, 6, "c")],
+        BackgroundConfig(
+            primary_estimator="paper_channel_nonzero_mean",
+            min_approved_intervals=40,
+            min_total_records=10_000,
+            min_records_per_interval=2,
+            paper_bootstrap_replicates=100,
+        ),
+    )
+
+    assert model.valid is True
+    assert model.background_dpf[low] == pytest.approx(3.0)
+    assert model.interval_support_count[low] == 2
+    assert model.nonzero_sample_count[low] == 4
+    assert model.support_level[low] == 1
+    assert model.support_level[unsupported] == 0
+    assert np.isnan(model.background_dpf[unsupported])
+    assert model.support_level[supported] == 2
+    assert np.isfinite(model.bootstrap_ci_low_dpf[supported])
+    assert np.isfinite(model.bootstrap_ci_high_dpf[supported])
+
+    raw = np.full(MODE1_SHAPE, 10.0)
+    corrected = apply_background(raw, model)
+    assert corrected.denoise_policy_version == DENOISE_POLICY_VERSION
+    assert corrected.corrected_dpf[low] == pytest.approx(7.0)
+    assert corrected.corrected_dpf[unsupported] == pytest.approx(10.0)
+    assert corrected.removed_dpf[unsupported] == pytest.approx(0.0)
 
 
 def test_uv_detector_requires_directional_broadband_morphology() -> None:
